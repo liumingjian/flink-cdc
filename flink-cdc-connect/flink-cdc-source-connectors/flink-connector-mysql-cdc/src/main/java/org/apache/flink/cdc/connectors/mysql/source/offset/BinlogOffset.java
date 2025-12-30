@@ -193,7 +193,11 @@ public class BinlogOffset implements Comparable<BinlogOffset>, Serializable {
                 if (gtidSet.equals(targetGtidSet)) {
                     long restartSkipEvents = this.getRestartSkipEvents();
                     long targetRestartSkipEvents = that.getRestartSkipEvents();
-                    return Long.compare(restartSkipEvents, targetRestartSkipEvents);
+                    if (restartSkipEvents != targetRestartSkipEvents) {
+                        return Long.compare(restartSkipEvents, targetRestartSkipEvents);
+                    }
+                    // The completed events are the same, so compare the row number ...
+                    return Long.compare(this.getRestartSkipRows(), that.getRestartSkipRows());
                 }
                 // The GTIDs are not an exact match, so figure out if this is a subset of the target
                 // offset
@@ -232,11 +236,15 @@ public class BinlogOffset implements Comparable<BinlogOffset>, Serializable {
             // compared ...
             long timestamp = this.getTimestampSec();
             long targetTimestamp = that.getTimestampSec();
-            return Long.compare(timestamp, targetTimestamp);
+            if (timestamp != 0 && targetTimestamp != 0) {
+                return Long.compare(timestamp, targetTimestamp);
+            }
         }
 
         // First compare the MySQL binlog filenames
-        if (this.getFilename().compareToIgnoreCase(that.getFilename()) != 0) {
+        if (this.getFilename() != null
+                && that.getFilename() != null
+                && this.getFilename().compareToIgnoreCase(that.getFilename()) != 0) {
             return this.getFilename().compareToIgnoreCase(that.getFilename());
         }
 
@@ -251,12 +259,7 @@ public class BinlogOffset implements Comparable<BinlogOffset>, Serializable {
         }
 
         // The completed events are the same, so compare the row number ...
-        if (this.getRestartSkipRows() != that.getRestartSkipRows()) {
-            return Long.compare(this.getRestartSkipRows(), that.getRestartSkipRows());
-        }
-
-        // The skip rows are the same, so compare the timestamp ...
-        return Long.compare(this.getTimestampSec(), that.getTimestampSec());
+        return Long.compare(this.getRestartSkipRows(), that.getRestartSkipRows());
     }
 
     public boolean isAtOrBefore(BinlogOffset that) {

@@ -28,8 +28,8 @@ limitations under the License.
     <artifactId>flink-cdc-source-e2e-tests</artifactId>
 
     <properties>
-        <flink-1.19>1.19.1</flink-1.19>
-        <flink-1.20>1.20.0</flink-1.20>
+        <flink-1.19>1.19.3</flink-1.19>
+        <flink-1.20>1.20.3</flink-1.20>
         <jdbc.version-1.19>3.2.0-1.19</jdbc.version-1.19>
         <jdbc.version-1.20>3.2.0-1.19</jdbc.version-1.20>
         <mysql.driver.version>8.0.27</mysql.driver.version>
@@ -88,13 +88,6 @@ limitations under the License.
         </dependency>
         <dependency>
             <groupId>org.apache.flink</groupId>
-            <artifactId>flink-connector-oceanbase-cdc</artifactId>
-            <version>${project.version}</version>
-            <type>test-jar</type>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.flink</groupId>
             <artifactId>flink-connector-oracle-cdc</artifactId>
             <version>${project.version}</version>
             <type>test-jar</type>
@@ -138,6 +131,12 @@ limitations under the License.
         <!-- testcontainers -->
         <dependency>
             <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${testcontainers.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
             <artifactId>mysql</artifactId>
             <version>${testcontainers.version}</version>
             <scope>test</scope>
@@ -169,13 +168,36 @@ limitations under the License.
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>mongodb</artifactId>
-            <version>1.18.3</version>
+            <version>${testcontainers.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
 
     <build>
         <plugins>
+            <plugin>
+                <artifactId>maven-resources-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>copy-gaussdb-driver</id>
+                        <phase>process-resources</phase>
+                        <goals>
+                            <goal>copy-resources</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.directory}/dependencies</outputDirectory>
+                            <resources>
+                                <resource>
+                                    <directory>${project.basedir}/../../flink-cdc-connect/flink-cdc-source-connectors/flink-connector-gaussdb-cdc/lib</directory>
+                                    <includes>
+                                        <include>gaussdbjdbc.jar</include>
+                                    </includes>
+                                </resource>
+                            </resources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
@@ -343,9 +365,9 @@ limitations under the License.
 
                         <artifactItem>
                             <groupId>org.apache.flink</groupId>
-                            <artifactId>flink-sql-connector-oceanbase-cdc</artifactId>
+                            <artifactId>flink-sql-connector-gaussdb-cdc</artifactId>
                             <version>${project.version}</version>
-                            <destFileName>oceanbase-cdc-connector.jar</destFileName>
+                            <destFileName>gaussdb-cdc-connector.jar</destFileName>
                             <type>jar</type>
                             <outputDirectory>${project.build.directory}/dependencies
                             </outputDirectory>

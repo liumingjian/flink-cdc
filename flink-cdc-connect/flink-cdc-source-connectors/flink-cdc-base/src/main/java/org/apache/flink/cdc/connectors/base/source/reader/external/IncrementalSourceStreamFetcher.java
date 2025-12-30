@@ -22,6 +22,7 @@ import org.apache.flink.cdc.connectors.base.source.meta.split.FinishedSnapshotSp
 import org.apache.flink.cdc.connectors.base.source.meta.split.SourceRecords;
 import org.apache.flink.cdc.connectors.base.source.meta.split.SourceSplitBase;
 import org.apache.flink.cdc.connectors.base.source.meta.split.StreamSplit;
+import org.apache.flink.cdc.connectors.base.utils.SplitKeyUtils;
 import org.apache.flink.util.FlinkRuntimeException;
 
 import org.apache.flink.shaded.guava31.com.google.common.util.concurrent.ThreadFactoryBuilder;
@@ -47,7 +48,12 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 
-/** Fetcher to fetch data from table split, the split is the stream split {@link StreamSplit}. */
+import static org.apache.flink.cdc.connectors.base.source.meta.wartermark.WatermarkEvent.isEndWatermarkEvent;
+
+/**
+ * Fetcher to fetch data from table split, the split is the stream split
+ * {@link StreamSplit}.
+ */
 public class IncrementalSourceStreamFetcher implements Fetcher<SourceRecords, SourceSplitBase> {
     private static final Logger LOG = LoggerFactory.getLogger(IncrementalSourceStreamFetcher.class);
 
@@ -64,16 +70,23 @@ public class IncrementalSourceStreamFetcher implements Fetcher<SourceRecords, So
     private Map<TableId, List<FinishedSnapshotSplitInfo>> finishedSplitsInfo;
     // tableId -> the max splitHighWatermark
     private Map<TableId, Offset> maxSplitHighWatermarkMap;
+    private final boolean isBackfillSkipped;
+    private final boolean supportsSplitKeyOptimization;
 
     private static final long READER_CLOSE_TIMEOUT_SECONDS = 30L;
 
     public IncrementalSourceStreamFetcher(FetchTask.Context taskContext, int subTaskId) {
         this.taskContext = taskContext;
-        ThreadFactory threadFactory =
-                new ThreadFactoryBuilder().setNameFormat("debezium-reader-" + subTaskId).build();
-        this.executorService = Executors.newSingleThreadExecutor(threadFactory);
-        this.currentTaskRunning = true;
+        this.executorService = Executors.newSingleThreadExecutor(
+                new ThreadFactoryBuilder()
+                        .setNameFormat("incremental-source-stream-fetcher-" + subTaskId)
+                        .build());
         this.pureStreamPhaseTables = new HashSet<>();
+        this.isBackfillSkipped = taskContext.getSourceConfig().isSkipSnapshotBackfill();
+        this.supportsSplitKeyOptimization = taskContext.supportsSplitKeyOptimization();
+        this.currentTaskRunning = true;
+        LOG.info("IncrementalSourceStreamFetcher initialized: taskContext class={}, taskContext identity={}",
+                taskContext.getClass().getName(), System.identityHashCode(taskContext));
     }
 
     @Override
@@ -94,12 +107,6 @@ public class IncrementalSourceStreamFetcher implements Fetcher<SourceRecords, So
                                         currentStreamSplit),
                                 e);
                         readException = e;
-                    } finally {
-                        try {
-                            stopReadTask();
-                        } catch (Exception e) {
-                            throw new RuntimeException(e);
-                        }
                     }
                 });
     }
@@ -114,10 +121,19 @@ public class IncrementalSourceStreamFetcher implements Fetcher<SourceRecords, So
     public Iterator<SourceRecords> pollSplitRecords() throws InterruptedException {
         checkReadException();
         final List<SourceRecord> sourceRecords = new ArrayList<>();
+        // what happens if currentTaskRunning
         if (currentTaskRunning) {
             List<DataChangeEvent> batch = queue.poll();
             for (DataChangeEvent event : batch) {
-                if (shouldEmit(event.getRecord())) {
+                if (isEndWatermarkEvent(event.getRecord())) {
+                    LOG.info("Read split {} end watermark event", currentStreamSplit);
+                    try {
+                        stopReadTask();
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                    break;
+                } else if (shouldEmit(event.getRecord())) {
                     sourceRecords.add(event.getRecord());
                 } else {
                     LOG.debug("{} data change event should not emit", event);
@@ -163,11 +179,15 @@ public class IncrementalSourceStreamFetcher implements Fetcher<SourceRecords, So
     /**
      * Returns the record should emit or not.
      *
-     * <p>The watermark signal algorithm is the stream split reader only sends the change event that
-     * belongs to its finished snapshot splits. For each snapshot split, the change event is valid
+     * <p>
+     * The watermark signal algorithm is the stream split reader only sends the
+     * change event that
+     * belongs to its finished snapshot splits. For each snapshot split, the change
+     * event is valid
      * since the offset is after its high watermark.
      *
-     * <pre> E.g: the data input is :
+     * <pre>
+     *  E.g: the data input is :
      *    snapshot-split-0 info : [0,    1024) highWatermark0
      *    snapshot-split-1 info : [1024, 2048) highWatermark1
      *  the data output is:
@@ -179,23 +199,36 @@ public class IncrementalSourceStreamFetcher implements Fetcher<SourceRecords, So
         if (taskContext.isDataChangeRecord(sourceRecord)) {
             TableId tableId = taskContext.getTableId(sourceRecord);
             Offset position = taskContext.getStreamOffset(sourceRecord);
+
             if (hasEnterPureStreamPhase(tableId, position)) {
                 return true;
             }
             // only the table who captured snapshot splits need to filter
             if (finishedSplitsInfo.containsKey(tableId)) {
-                for (FinishedSnapshotSplitInfo splitInfo : finishedSplitsInfo.get(tableId)) {
-                    if (taskContext.isRecordBetween(
-                                    sourceRecord,
-                                    splitInfo.getSplitStart(),
-                                    splitInfo.getSplitEnd())
-                            && position.isAfter(splitInfo.getHighWatermark())) {
-                        return true;
+                // if backfill skipped, don't need to filter
+                if (isBackfillSkipped) {
+                    return true;
+                }
+                List<FinishedSnapshotSplitInfo> tableSplits = finishedSplitsInfo.get(tableId);
+                if (supportsSplitKeyOptimization) {
+                    Object[] splitKey = taskContext.getSplitKey(sourceRecord);
+                    FinishedSnapshotSplitInfo matchedSplit = SplitKeyUtils.findSplitByKeyBinary(tableSplits, splitKey);
+                    return matchedSplit != null && position.isAfter(matchedSplit.getHighWatermark());
+                } else {
+                    for (FinishedSnapshotSplitInfo splitInfo : tableSplits) {
+                        if (taskContext.isRecordBetween(
+                                sourceRecord,
+                                splitInfo.getSplitStart(),
+                                splitInfo.getSplitEnd())) {
+                            return position.isAfter(splitInfo.getHighWatermark());
+                        }
                     }
                 }
             }
-            // not in the monitored splits scope, do not emit
-            return false;
+            // if we are in newly added table phase, and the table is not in pure stream
+            // phase,
+            // we should not emit it.
+            return taskContext.getSourceConfig().isScanNewlyAddedTableEnabled();
         }
         // always send the schema change event and signal event
         // we need record them to state of Flink
@@ -213,9 +246,12 @@ public class IncrementalSourceStreamFetcher implements Fetcher<SourceRecords, So
             return true;
         }
 
-        // Use still need to capture new sharding table if user disable scan new added table,
-        // The history records for all new added tables(including sharding table and normal table)
-        // will be capture after restore from a savepoint if user enable scan new added table
+        // Use still need to capture new sharding table if user disable scan new added
+        // table,
+        // The history records for all new added tables(including sharding table and
+        // normal table)
+        // will be capture after restore from a savepoint if user enable scan new added
+        // table
         if (!taskContext.getSourceConfig().isScanNewlyAddedTableEnabled()) {
             // the new added sharding table without history records
             return !maxSplitHighWatermarkMap.containsKey(tableId)
@@ -225,8 +261,7 @@ public class IncrementalSourceStreamFetcher implements Fetcher<SourceRecords, So
     }
 
     private void configureFilter() {
-        List<FinishedSnapshotSplitInfo> finishedSplitInfos =
-                currentStreamSplit.getFinishedSnapshotSplitInfos();
+        List<FinishedSnapshotSplitInfo> finishedSplitInfos = currentStreamSplit.getFinishedSnapshotSplitInfos();
         Map<TableId, List<FinishedSnapshotSplitInfo>> splitsInfoMap = new HashMap<>();
         Map<TableId, Offset> tableIdOffsetPositionMap = new HashMap<>();
         // startup mode which is stream only
@@ -239,8 +274,7 @@ public class IncrementalSourceStreamFetcher implements Fetcher<SourceRecords, So
         else {
             for (FinishedSnapshotSplitInfo finishedSplitInfo : finishedSplitInfos) {
                 TableId tableId = finishedSplitInfo.getTableId();
-                List<FinishedSnapshotSplitInfo> list =
-                        splitsInfoMap.getOrDefault(tableId, new ArrayList<>());
+                List<FinishedSnapshotSplitInfo> list = splitsInfoMap.getOrDefault(tableId, new ArrayList<>());
                 list.add(finishedSplitInfo);
                 splitsInfoMap.put(tableId, list);
 
@@ -249,6 +283,9 @@ public class IncrementalSourceStreamFetcher implements Fetcher<SourceRecords, So
                 if (maxHighWatermark == null || highWatermark.isAfter(maxHighWatermark)) {
                     tableIdOffsetPositionMap.put(tableId, highWatermark);
                 }
+            }
+            if (supportsSplitKeyOptimization) {
+                splitsInfoMap.values().forEach(SplitKeyUtils::sortFinishedSplitInfos);
             }
         }
         this.finishedSplitsInfo = splitsInfoMap;
