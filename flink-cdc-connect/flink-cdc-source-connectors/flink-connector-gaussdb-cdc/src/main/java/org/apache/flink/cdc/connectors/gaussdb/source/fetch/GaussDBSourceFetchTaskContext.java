@@ -45,6 +45,9 @@ import io.debezium.connector.postgresql.PostgresTaskContext;
 import io.debezium.connector.postgresql.PostgresTopicSelector;
 import io.debezium.connector.postgresql.connection.PostgresConnection;
 import io.debezium.connector.gaussdb.connection.GaussDBPostgresConnection;
+import io.debezium.connector.gaussdb.connection.GaussDBReplicationConnection;
+import io.debezium.connector.gaussdb.GaussDBConnectorConfig;
+import io.debezium.connector.gaussdb.decoder.MppdbDecodingMessageDecoder;
 import io.debezium.connector.postgresql.connection.ReplicationConnection;
 import io.debezium.connector.postgresql.spi.Snapshotter;
 import io.debezium.data.Envelope;
@@ -66,6 +69,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.sql.SQLException;
+import java.time.Duration;
 
 import static io.debezium.connector.AbstractSourceInfo.SCHEMA_NAME_KEY;
 import static io.debezium.connector.AbstractSourceInfo.TABLE_NAME_KEY;
@@ -73,7 +77,7 @@ import static io.debezium.connector.postgresql.PostgresConnectorConfig.DROP_SLOT
 import static io.debezium.connector.postgresql.PostgresConnectorConfig.PLUGIN_NAME;
 import static io.debezium.connector.postgresql.PostgresConnectorConfig.SLOT_NAME;
 import static io.debezium.connector.postgresql.PostgresConnectorConfig.SNAPSHOT_MODE;
-import static io.debezium.connector.postgresql.PostgresObjectUtils.createReplicationConnection;
+// GaussDB uses custom createGaussDBReplicationConnection instead of PostgresObjectUtils.createReplicationConnection
 import static io.debezium.connector.postgresql.PostgresObjectUtils.newPostgresValueConverterBuilder;
 
 /**
@@ -142,7 +146,12 @@ public class GaussDBSourceFetchTaskContext extends JdbcSourceFetchTaskContext {
                             .with(DROP_SLOT_ON_STOP.name(), true)
                             // Disable heartbeat event in snapshot split fetcher
                             .with(Heartbeat.HEARTBEAT_INTERVAL, 0)
-                            .build());
+                            .build()) {
+                @Override
+                public LogicalDecoder plugin() {
+                    return LogicalDecoder.WAL2JSON;
+                }
+            };
         } else {
             dbzConfig = new PostgresConnectorConfig(
                     dbzConfig
@@ -150,7 +159,12 @@ public class GaussDBSourceFetchTaskContext extends JdbcSourceFetchTaskContext {
                             .edit()
                             // never drop slot for stream split, which is also global split
                             .with(DROP_SLOT_ON_STOP.name(), false)
-                            .build());
+                            .build()) {
+                @Override
+                public LogicalDecoder plugin() {
+                    return LogicalDecoder.WAL2JSON;
+                }
+            };
         }
 
         LOG.info("PostgresConnectorConfig is ", dbzConfig.getConfig().asProperties().toString());
@@ -193,10 +207,9 @@ public class GaussDBSourceFetchTaskContext extends JdbcSourceFetchTaskContext {
         this.taskContext = PostgresObjectUtils.newTaskContext(dbzConfig, schema, topicSelector);
 
         if (replicationConnection == null) {
-            replicationConnection = createReplicationConnection(
+            replicationConnection = createGaussDBReplicationConnection(
                     this.taskContext,
                     jdbcConnection,
-                    this.snapShotter.shouldSnapshot(),
                     dbzConfig);
         }
 
@@ -333,8 +346,51 @@ public class GaussDBSourceFetchTaskContext extends JdbcSourceFetchTaskContext {
     }
 
     public String getPluginName() {
-        return PostgresConnectorConfig.LogicalDecoder.parse(
-                sourceConfig.getDbzProperties().getProperty(PLUGIN_NAME.name()))
-                .getPostgresPluginName();
+        // GaussDB uses mppdb_decoding which is not in Debezium's LogicalDecoder enum.
+        // Return the plugin name directly without parsing through the enum.
+        return sourceConfig.getDbzProperties().getProperty(PLUGIN_NAME.name());
+    }
+
+    /**
+     * Creates a GaussDBReplicationConnection instead of
+     * PostgresReplicationConnection.
+     * GaussDB requires using HA port (standard port + 1) for replication
+     * connections.
+     * This method bypasses PostgresObjectUtils.createReplicationConnection which
+     * would
+     * create a PostgresReplicationConnection without HA port support.
+     */
+    private static ReplicationConnection createGaussDBReplicationConnection(
+            PostgresTaskContext taskContext,
+            PostgresConnection jdbcConnection,
+            PostgresConnectorConfig postgresConnectorConfig) {
+        // Create GaussDBConnectorConfig from the same configuration
+        GaussDBConnectorConfig gaussDBConfig = new GaussDBConnectorConfig(
+                postgresConnectorConfig.getConfig());
+
+        // Create message decoder for mppdb_decoding plugin using default constructor
+        MppdbDecodingMessageDecoder messageDecoder = new MppdbDecodingMessageDecoder();
+
+        // Get slot name and plugin name from context/config
+        String slotName = postgresConnectorConfig.getConfig().getString(SLOT_NAME);
+        String pluginName = postgresConnectorConfig.getConfig().getString(PLUGIN_NAME);
+        boolean dropSlotOnClose = postgresConnectorConfig.getConfig().getBoolean(DROP_SLOT_ON_STOP);
+
+        // Default status update interval of 10 seconds
+        Duration statusUpdateInterval = Duration.ofSeconds(10);
+
+        LOG.info("Creating GaussDBReplicationConnection with slot={}, plugin={}, dropOnClose={}",
+                slotName, pluginName, dropSlotOnClose);
+
+        // Create GaussDBReplicationConnection which handles HA port (port+1) internally
+        return new GaussDBReplicationConnection(
+                gaussDBConfig,
+                slotName,
+                pluginName,
+                dropSlotOnClose,
+                statusUpdateInterval,
+                messageDecoder,
+                jdbcConnection.getTypeRegistry(),
+                null); // Initial connection is created internally with HA port
     }
 }

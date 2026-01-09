@@ -117,8 +117,7 @@ public class GaussDBDialect implements JdbcDataSourceDialect {
         LOG.info("=== GaussDBDialect.discoverDataCollections STARTED ===");
         try (JdbcConnection jdbc = openJdbcConnection(sourceConfig)) {
             List<TableId> tables = TableDiscoveryUtils.listTables(
-                    // there is always a single database provided
-                    sourceConfig.getDatabaseList().get(0),
+                    null,
                     jdbc,
                     ((GaussDBSourceConfig) sourceConfig).getTableFilters());
             LOG.info("=== Discovered {} tables: {} ===", tables.size(), tables);

@@ -76,24 +76,21 @@ public class GaussDBStreamFetchTask implements FetchTask<SourceSplitBase> {
             LOG.debug("execute StreamFetchTask for split: {}", split);
         }
 
-        GaussDBSourceFetchTaskContext sourceFetchContext =
-                (GaussDBSourceFetchTaskContext) context;
+        GaussDBSourceFetchTaskContext sourceFetchContext = (GaussDBSourceFetchTaskContext) context;
         taskRunning = true;
-        streamSplitReadTask =
-                new StreamSplitReadTask(
-                        sourceFetchContext.getDbzConnectorConfig(),
-                        sourceFetchContext.getSnapShotter(),
-                        sourceFetchContext.getConnection(),
-                        sourceFetchContext.getDispatcher(),
-                        sourceFetchContext.getGaussDBDispatcher(),
-                        sourceFetchContext.getErrorHandler(),
-                        sourceFetchContext.getTaskContext().getClock(),
-                        sourceFetchContext.getDatabaseSchema(),
-                        sourceFetchContext.getTaskContext(),
-                        sourceFetchContext.getReplicationConnection(),
-                        split);
-        StoppableChangeEventSourceContext changeEventSourceContext =
-                new StoppableChangeEventSourceContext();
+        streamSplitReadTask = new StreamSplitReadTask(
+                sourceFetchContext.getDbzConnectorConfig(),
+                sourceFetchContext.getSnapShotter(),
+                sourceFetchContext.getConnection(),
+                sourceFetchContext.getDispatcher(),
+                sourceFetchContext.getGaussDBDispatcher(),
+                sourceFetchContext.getErrorHandler(),
+                sourceFetchContext.getTaskContext().getClock(),
+                sourceFetchContext.getDatabaseSchema(),
+                sourceFetchContext.getTaskContext(),
+                sourceFetchContext.getReplicationConnection(),
+                split);
+        StoppableChangeEventSourceContext changeEventSourceContext = new StoppableChangeEventSourceContext();
         streamSplitReadTask.execute(
                 changeEventSourceContext,
                 sourceFetchContext.getPartition(),
@@ -126,22 +123,25 @@ public class GaussDBStreamFetchTask implements FetchTask<SourceSplitBase> {
             PostgresOffsetContext postgresOffsetContext = streamSplitReadTask.offsetContext;
 
             // only extracting and storing the lsn of the last commit
-            Long commitLsn =
-                    (Long)
-                            postgresOffsetContext
-                                    .getOffset()
-                                    .get(PostgresOffsetContext.LAST_COMMIT_LSN_KEY);
+            Long commitLsn = (Long) postgresOffsetContext
+                    .getOffset()
+                    .get(PostgresOffsetContext.LAST_COMMIT_LSN_KEY);
 
             if (offsetToCommit != null) {
-                // We should commit the checkpoint's LSN instead of postgresOffsetContext's LSN to
+                // We should commit the checkpoint's LSN instead of postgresOffsetContext's LSN
+                // to
                 // the slot.
                 // If the checkpoint succeeds and a table UPDATE message arrives before the
                 // notifyCheckpoint is called, which is represented as a BEGIN/UPDATE/COMMIT WAL
-                // event sequence. The LSN of postgresOffsetContext will be updated to the LSN of
-                // the COMMIT event. Committing the COMMIT LSN to the slot is incorrect because if a
+                // event sequence. The LSN of postgresOffsetContext will be updated to the LSN
+                // of
+                // the COMMIT event. Committing the COMMIT LSN to the slot is incorrect because
+                // if a
                 // failover occurs after the successful commission, Flink will recover from that
-                // checkpoint and consume WAL starting from the slot LSN that is the LSN of COMMIT
-                // event, rather than from the checkpoint's LSN. Therefore, UPDATE messages cannot
+                // checkpoint and consume WAL starting from the slot LSN that is the LSN of
+                // COMMIT
+                // event, rather than from the checkpoint's LSN. Therefore, UPDATE messages
+                // cannot
                 // be consumed, resulting in data loss.
                 commitLsn = ((GaussDBOffset) offsetToCommit).getLsn().asLong();
             }
@@ -162,7 +162,10 @@ public class GaussDBStreamFetchTask implements FetchTask<SourceSplitBase> {
         }
     }
 
-    /** A {@link ChangeEventSource} implementation for GaussDB to read streaming changes. */
+    /**
+     * A {@link ChangeEventSource} implementation for GaussDB to read streaming
+     * changes.
+     */
     public static class StreamSplitReadTask extends PostgresStreamingChangeEventSource {
         private static final Logger LOG = LoggerFactory.getLogger(StreamSplitReadTask.class);
         private final StreamSplit streamSplit;
@@ -211,8 +214,11 @@ public class GaussDBStreamFetchTask implements FetchTask<SourceSplitBase> {
 
             LOG.info("Execute StreamSplitReadTask for split: {}", streamSplit);
 
-            offsetContext.setStreamingStoppingLsn(
-                    ((GaussDBOffset) streamSplit.getEndingOffset()).getLsn());
+            Lsn endingLsn = ((GaussDBOffset) streamSplit.getEndingOffset()).getLsn();
+            if (GaussDBOffset.NO_STOPPING_OFFSET.getLsn().equals(endingLsn)) {
+                endingLsn = null;
+            }
+            offsetContext.setStreamingStoppingLsn(endingLsn);
             super.execute(context, partition, offsetContext);
             if (isBoundedRead()) {
                 LOG.debug("StreamSplit is bounded read: {}", streamSplit);

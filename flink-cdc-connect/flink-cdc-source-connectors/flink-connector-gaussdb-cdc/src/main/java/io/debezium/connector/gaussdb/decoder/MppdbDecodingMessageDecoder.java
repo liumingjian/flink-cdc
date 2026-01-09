@@ -4,7 +4,7 @@
  * Licensed under the Apache Software License version 2.0, available at http://www.apache.org/licenses/LICENSE-2.0
  */
 
-package io.debezium.connector.postgresql.decoder;
+package io.debezium.connector.gaussdb.decoder;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -39,7 +39,8 @@ import java.util.regex.Pattern;
 /**
  * Message decoder for GaussDB's {@code mppdb_decoding} logical decoding output.
  *
- * <p>Expected JSON format:
+ * <p>
+ * Expected JSON format:
  *
  * <pre>
  * {
@@ -60,8 +61,7 @@ public class MppdbDecodingMessageDecoder extends AbstractMessageDecoder {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private static final long UNDEFINED_TX_ID = -1L;
-    private static final Pattern TX_MARKER_PATTERN =
-            Pattern.compile("^(?i)(BEGIN|COMMIT)(?:\\s+([0-9]+))?.*$");
+    private static final Pattern TX_MARKER_PATTERN = Pattern.compile("^(?i)(BEGIN|COMMIT)(?:\\s+([0-9]+))?.*$");
 
     private Long currentTransactionId;
     private Instant currentTransactionTimestamp;
@@ -137,12 +137,12 @@ public class MppdbDecodingMessageDecoder extends AbstractMessageDecoder {
         final JsonNode oldKeysType = root.get("old_keys_type");
         final JsonNode oldKeysVal = root.get("old_keys_val");
 
-        final List<ReplicationMessage.Column> columns =
-                toColumns(typeRegistry, columnsName, columnsType, columnsVal, message);
-        final List<ReplicationMessage.Column> newTuple =
-                operation == ReplicationMessage.Operation.DELETE ? null : columns;
-        final List<ReplicationMessage.Column> oldKeys =
-                toColumns(typeRegistry, oldKeysName, oldKeysType, oldKeysVal, message);
+        final List<ReplicationMessage.Column> columns = toColumns(typeRegistry, columnsName, columnsType, columnsVal,
+                message);
+        final List<ReplicationMessage.Column> newTuple = operation == ReplicationMessage.Operation.DELETE ? null
+                : columns;
+        final List<ReplicationMessage.Column> oldKeys = toColumns(typeRegistry, oldKeysName, oldKeysType, oldKeysVal,
+                message);
 
         if (operation != ReplicationMessage.Operation.DELETE && columns == null) {
             LOG.warn(
@@ -222,8 +222,7 @@ public class MppdbDecodingMessageDecoder extends AbstractMessageDecoder {
         }
 
         final String marker = matcher.group(1).toUpperCase();
-        final long txId =
-                matcher.group(2) != null ? Long.parseLong(matcher.group(2)) : UNDEFINED_TX_ID;
+        final long txId = matcher.group(2) != null ? Long.parseLong(matcher.group(2)) : UNDEFINED_TX_ID;
         final Instant ts = Instant.now();
 
         if ("BEGIN".equals(marker)) {
@@ -232,8 +231,7 @@ public class MppdbDecodingMessageDecoder extends AbstractMessageDecoder {
             processor.process(new TransactionMessage(ReplicationMessage.Operation.BEGIN, txId, ts));
         } else {
             final long commitTxId = currentTransactionId != null ? currentTransactionId : txId;
-            final Instant commitTs =
-                    currentTransactionTimestamp != null ? currentTransactionTimestamp : ts;
+            final Instant commitTs = currentTransactionTimestamp != null ? currentTransactionTimestamp : ts;
             processor.process(
                     new TransactionMessage(
                             ReplicationMessage.Operation.COMMIT, commitTxId, commitTs));
@@ -257,8 +255,7 @@ public class MppdbDecodingMessageDecoder extends AbstractMessageDecoder {
             processor.process(new TransactionMessage(ReplicationMessage.Operation.BEGIN, txId, ts));
         } else {
             final long commitTxId = currentTransactionId != null ? currentTransactionId : txId;
-            final Instant commitTs =
-                    currentTransactionTimestamp != null ? currentTransactionTimestamp : ts;
+            final Instant commitTs = currentTransactionTimestamp != null ? currentTransactionTimestamp : ts;
             processor.process(
                     new TransactionMessage(
                             ReplicationMessage.Operation.COMMIT, commitTxId, commitTs));
@@ -334,8 +331,7 @@ public class MppdbDecodingMessageDecoder extends AbstractMessageDecoder {
             final String columnName = names.get(i).asText();
             final String fullType = types.get(i).asText();
             final JsonNode valueNode = values.get(i);
-            final String rawValue =
-                    valueNode == null || valueNode.isNull() ? null : valueNode.asText();
+            final String rawValue = valueNode == null || valueNode.isNull() ? null : valueNode.asText();
 
             final PostgresType columnType = typeRegistry.get(parseType(columnName, fullType));
             final MppdbColumnValue columnValue = new MppdbColumnValue(rawValue);
@@ -366,9 +362,8 @@ public class MppdbDecodingMessageDecoder extends AbstractMessageDecoder {
     }
 
     private static String parseType(String columnName, String typeWithModifiers) {
-        Matcher matcher =
-                AbstractReplicationMessageColumn.TypeMetadataImpl.TYPE_PATTERN.matcher(
-                        typeWithModifiers);
+        Matcher matcher = AbstractReplicationMessageColumn.TypeMetadataImpl.TYPE_PATTERN.matcher(
+                typeWithModifiers);
         if (!matcher.matches()) {
             LOG.warn("Failed to parse columnType for {} '{}'", columnName, typeWithModifiers);
             return TypeRegistry.normalizeTypeName(typeWithModifiers);

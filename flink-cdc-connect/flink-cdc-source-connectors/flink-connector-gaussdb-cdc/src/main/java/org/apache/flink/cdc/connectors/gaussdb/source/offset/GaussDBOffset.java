@@ -36,10 +36,9 @@ public class GaussDBOffset extends Offset {
 
     private static final Logger LOG = org.slf4j.LoggerFactory.getLogger(GaussDBOffset.class);
 
-    public static final GaussDBOffset INITIAL_OFFSET =
-            new GaussDBOffset(Lsn.INVALID_LSN.asLong(), null, Instant.MIN);
-    public static final GaussDBOffset NO_STOPPING_OFFSET =
-            new GaussDBOffset(Lsn.NO_STOPPING_LSN.asLong(), null, Instant.MAX);
+    public static final GaussDBOffset INITIAL_OFFSET = new GaussDBOffset(Lsn.INVALID_LSN.asLong(), null, Instant.MIN);
+    public static final GaussDBOffset NO_STOPPING_OFFSET = new GaussDBOffset(Lsn.NO_STOPPING_LSN.asLong(), null,
+            Instant.MAX);
 
     // used by GaussDBOffsetFactory
     GaussDBOffset(Map<String, String> offset) {
@@ -48,7 +47,8 @@ public class GaussDBOffset extends Offset {
 
     GaussDBOffset(Long lsn, Long txId, Instant lastCommitTs) {
         Map<String, String> offsetMap = new HashMap<>();
-        // keys are from io.debezium.connector.postgresql.PostgresOffsetContext.Loader.load
+        // keys are from
+        // io.debezium.connector.postgresql.PostgresOffsetContext.Loader.load
         offsetMap.put(SourceInfo.LSN_KEY, lsn.toString());
         if (txId != null) {
             offsetMap.put(SourceInfo.TXID_KEY, txId.toString());
@@ -76,7 +76,18 @@ public class GaussDBOffset extends Offset {
     }
 
     public Lsn getLsn() {
-        return Lsn.valueOf(Long.valueOf(this.offset.get(SourceInfo.LSN_KEY)));
+        String lsnStr = this.offset.get(SourceInfo.LSN_KEY);
+        if (lsnStr == null) {
+            return Lsn.INVALID_LSN;
+        }
+        if (!lsnStr.contains("/")) {
+            try {
+                return Lsn.valueOf(Long.valueOf(lsnStr));
+            } catch (NumberFormatException e) {
+                // fall through to Lsn.valueOf(String)
+            }
+        }
+        return Lsn.valueOf(lsnStr);
     }
 
     @Nullable

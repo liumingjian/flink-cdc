@@ -18,6 +18,7 @@
 package org.apache.flink.cdc.connectors.gaussdb.source.fetch;
 
 import org.apache.flink.cdc.connectors.base.relational.JdbcSourceEventDispatcher;
+import io.debezium.connector.gaussdb.connection.GaussDBReplicationConnection;
 import org.apache.flink.cdc.connectors.base.source.meta.split.SnapshotSplit;
 import org.apache.flink.cdc.connectors.base.source.meta.split.StreamSplit;
 import org.apache.flink.cdc.connectors.base.source.reader.external.AbstractScanFetchTask;
@@ -86,7 +87,7 @@ public class GaussDBScanFetchTask extends AbstractScanFetchTask {
         } finally {
             // remove slot after snapshot slit finish
             maybeDropSlotForBackFillReadTask(
-                    (PostgresReplicationConnection) ctx.getReplicationConnection(),
+                    (GaussDBReplicationConnection) ctx.getReplicationConnection(),
                     sourceConfig.isSkipSnapshotBackfill());
         }
     }
@@ -186,7 +187,7 @@ public class GaussDBScanFetchTask extends AbstractScanFetchTask {
 
     /** Drop slot for backfill task and close replication connection. */
     private void maybeDropSlotForBackFillReadTask(
-            PostgresReplicationConnection replicationConnection, boolean skipSnapshotBackfill) {
+            GaussDBReplicationConnection replicationConnection, boolean skipSnapshotBackfill) {
         // if skip backfill, no need to create slot here
         if (skipSnapshotBackfill) {
             return;

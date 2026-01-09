@@ -15,13 +15,13 @@
  * limitations under the License.
  */
 
-package io.debezium.connector.postgresql.connection;
+package io.debezium.connector.gaussdb.connection;
 
 import com.huawei.gaussdb.jdbc.PGConnection;
 import com.huawei.gaussdb.jdbc.replication.PGReplicationStream;
 import com.huawei.gaussdb.jdbc.replication.fluent.logical.ChainedLogicalStreamBuilder;
 import io.debezium.connector.gaussdb.GaussDBConnectorConfig;
-import io.debezium.connector.postgresql.decoder.MppdbDecodingMessageDecoder;
+import io.debezium.connector.gaussdb.decoder.MppdbDecodingMessageDecoder;
 import io.debezium.connector.postgresql.TypeRegistry;
 import io.debezium.connector.postgresql.connection.Lsn;
 import io.debezium.connector.postgresql.connection.ReplicationConnection;
@@ -546,15 +546,16 @@ public class GaussDBReplicationConnection implements ReplicationConnection {
             LOG.info("Calling builder.start() to create replication stream...");
             final PGReplicationStream stream = builder.start();
             LOG.info("Replication stream started successfully");
-            
-            // Small delay to stabilize connection when connections are opened/closed in fast sequence
+
+            // Small delay to stabilize connection when connections are opened/closed in
+            // fast sequence
             // See reference implementation in GaussDB-For-Apache-Flink project
             try {
                 Thread.sleep(10);
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
             }
-            
+
             // ensure server sees feedback quickly
             stream.forceUpdateStatus();
             LOG.info("Initial status update sent to server");

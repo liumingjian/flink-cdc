@@ -20,6 +20,8 @@ package org.apache.flink.cdc.connectors.gaussdb.source.offset;
 import org.apache.flink.cdc.connectors.base.source.meta.offset.Offset;
 
 import io.debezium.connector.postgresql.PostgresOffsetContext;
+import io.debezium.connector.postgresql.SourceInfo;
+import io.debezium.connector.postgresql.connection.Lsn;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -30,17 +32,28 @@ public class GaussDBOffsetUtils {
     public static PostgresOffsetContext getPostgresOffsetContext(
             PostgresOffsetContext.Loader loader, Offset offset) {
 
-        Map<String, String> offsetStrMap =
-                Objects.requireNonNull(offset, "offset is null for the sourceSplitBase")
-                        .getOffset();
+        Map<String, String> offsetStrMap = Objects.requireNonNull(offset, "offset is null for the sourceSplitBase")
+                .getOffset();
         // all the keys happen to be long type for PostgresOffsetContext.Loader.load
         Map<String, Object> offsetMap = new HashMap<>();
         for (String key : offsetStrMap.keySet()) {
             String value = offsetStrMap.get(key);
             if (value != null) {
-                offsetMap.put(key, Long.parseLong(value));
+                if (SourceInfo.LSN_KEY.equals(key)) {
+                    offsetMap.put(key, Lsn.valueOf(value).asLong());
+                } else {
+                    offsetMap.put(key, Long.parseLong(value));
+                }
             }
         }
+
+        if (!offsetMap.containsKey(SourceInfo.TXID_KEY)) {
+            offsetMap.put(SourceInfo.TXID_KEY, 0L);
+        }
+        if (!offsetMap.containsKey(SourceInfo.TIMESTAMP_USEC_KEY)) {
+            offsetMap.put(SourceInfo.TIMESTAMP_USEC_KEY, 0L);
+        }
+
         return loader.load(offsetMap);
     }
 }
