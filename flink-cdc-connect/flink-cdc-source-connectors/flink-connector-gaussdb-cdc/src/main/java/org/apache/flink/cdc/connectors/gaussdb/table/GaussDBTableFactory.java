@@ -72,7 +72,7 @@ import static org.apache.flink.util.Preconditions.checkState;
 /** Factory for creating configured instance of {@link GaussDBTableSource}. */
 public class GaussDBTableFactory implements DynamicTableSourceFactory {
 
-    private static final String IDENTIFIER = "postgres-cdc";
+    private static final String IDENTIFIER = "gaussdb-cdc";
 
     @Override
     public DynamicTableSource createDynamicTableSource(DynamicTableFactory.Context context) {
