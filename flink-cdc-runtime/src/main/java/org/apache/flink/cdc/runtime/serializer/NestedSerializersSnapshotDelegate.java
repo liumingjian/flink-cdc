@@ -32,18 +32,28 @@ import static org.apache.flink.cdc.common.utils.Preconditions.checkArgument;
 import static org.apache.flink.cdc.common.utils.Preconditions.checkNotNull;
 
 /**
- * A NestedSerializersSnapshotDelegate represents the snapshots of multiple serializers that are
- * used by an outer serializer. Examples would be tuples, where the outer serializer is the tuple
- * format serializer, and the NestedSerializersSnapshotDelegate holds the serializers for the
+ * A NestedSerializersSnapshotDelegate represents the snapshots of multiple
+ * serializers that are
+ * used by an outer serializer. Examples would be tuples, where the outer
+ * serializer is the tuple
+ * format serializer, and the NestedSerializersSnapshotDelegate holds the
+ * serializers for the
  * different tuple fields.
  *
- * <p>The NestedSerializersSnapshotDelegate does not implement the {@link TypeSerializerSnapshot}
- * interface. It is not meant to be inherited from, but to be composed with a serializer snapshot
+ * <p>
+ * The NestedSerializersSnapshotDelegate does not implement the
+ * {@link TypeSerializerSnapshot}
+ * interface. It is not meant to be inherited from, but to be composed with a
+ * serializer snapshot
  * implementation.
  *
- * <p>The NestedSerializersSnapshotDelegate has its own versioning internally, it does not couple
- * its versioning to the versioning of the TypeSerializerSnapshot that builds on top of this class.
- * That way, the NestedSerializersSnapshotDelegate and enclosing TypeSerializerSnapshot the can
+ * <p>
+ * The NestedSerializersSnapshotDelegate has its own versioning internally, it
+ * does not couple
+ * its versioning to the versioning of the TypeSerializerSnapshot that builds on
+ * top of this class.
+ * That way, the NestedSerializersSnapshotDelegate and enclosing
+ * TypeSerializerSnapshot the can
  * evolve their formats independently.
  */
 public class NestedSerializersSnapshotDelegate {
@@ -59,7 +69,13 @@ public class NestedSerializersSnapshotDelegate {
 
     /** Constructor to create a snapshot for writing. */
     public NestedSerializersSnapshotDelegate(TypeSerializer<?>... serializers) {
-        this.nestedSnapshots = TypeSerializerUtils.snapshot(serializers);
+        // Manual implementation for Flink 1.16 compatibility
+        // (TypeSerializerUtils.snapshot() is 1.17+)
+        TypeSerializerSnapshot<?>[] snapshots = new TypeSerializerSnapshot<?>[serializers.length];
+        for (int i = 0; i < serializers.length; i++) {
+            snapshots[i] = serializers[i].snapshotConfiguration();
+        }
+        this.nestedSnapshots = snapshots;
     }
 
     /** Constructor to create a snapshot during deserialization. */
@@ -68,11 +84,12 @@ public class NestedSerializersSnapshotDelegate {
     }
 
     // ------------------------------------------------------------------------
-    //  Nested Serializers and Compatibility
+    // Nested Serializers and Compatibility
     // ------------------------------------------------------------------------
 
     /**
-     * Produces a restore serializer from each contained serializer configuration snapshot. The
+     * Produces a restore serializer from each contained serializer configuration
+     * snapshot. The
      * serializers are returned in the same order as the snapshots are stored.
      */
     public TypeSerializer<?>[] getRestoredNestedSerializers() {
@@ -99,11 +116,14 @@ public class NestedSerializersSnapshotDelegate {
     }
 
     /**
-     * Resolves the compatibility of the nested serializer snapshots with the nested serializers of
+     * Resolves the compatibility of the nested serializer snapshots with the nested
+     * serializers of
      * the new outer serializer.
      *
-     * @deprecated this no method will be removed in the future. Resolving compatibility for nested
-     *     serializers is now handled by {@link CompositeTypeSerializerSnapshot}.
+     * @deprecated this no method will be removed in the future. Resolving
+     *             compatibility for nested
+     *             serializers is now handled by
+     *             {@link CompositeTypeSerializerSnapshot}.
      */
     @Deprecated
     public <T> TypeSerializerSchemaCompatibility<T> resolveCompatibilityWithNested(
@@ -122,8 +142,8 @@ public class NestedSerializersSnapshotDelegate {
         // check nested serializers for compatibility
         boolean nestedSerializerRequiresMigration = false;
         for (int i = 0; i < nestedSnapshots.length; i++) {
-            TypeSerializerSchemaCompatibility<?> compatibility =
-                    resolveCompatibility(newNestedSerializers[i], nestedSnapshots[i]);
+            TypeSerializerSchemaCompatibility<?> compatibility = resolveCompatibility(newNestedSerializers[i],
+                    nestedSnapshots[i]);
 
             if (compatibility.isIncompatible()) {
                 return TypeSerializerSchemaCompatibility.incompatible();
@@ -139,7 +159,7 @@ public class NestedSerializersSnapshotDelegate {
     }
 
     // ------------------------------------------------------------------------
-    //  Serialization
+    // Serialization
     // ------------------------------------------------------------------------
 
     /** Writes the composite snapshot of all the contained serializers. */
@@ -170,8 +190,7 @@ public class NestedSerializersSnapshotDelegate {
         }
 
         final int numSnapshots = in.readInt();
-        final TypeSerializerSnapshot<?>[] nestedSnapshots =
-                new TypeSerializerSnapshot<?>[numSnapshots];
+        final TypeSerializerSnapshot<?>[] nestedSnapshots = new TypeSerializerSnapshot<?>[numSnapshots];
 
         for (int i = 0; i < numSnapshots; i++) {
             nestedSnapshots[i] = TypeSerializerSnapshot.readVersionedSnapshot(in, cl);
@@ -181,7 +200,7 @@ public class NestedSerializersSnapshotDelegate {
     }
 
     // ------------------------------------------------------------------------
-    //  Utilities
+    // Utilities
     // ------------------------------------------------------------------------
 
     /** Utility method to conjure up a new scope for the generic parameters. */
