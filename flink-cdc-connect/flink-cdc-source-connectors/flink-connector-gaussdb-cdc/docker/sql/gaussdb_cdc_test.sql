@@ -28,7 +28,7 @@ CREATE TABLE gaussdb_products (
     'schema-name' = 'public',
     'table-name' = 'products',
     'slot.name' = 'flink_cdc_test_slot',
-    'decoding.plugin.name' = 'mppdb_decoding',
+    'decoding.plugin.name' = 'pgoutput',
     'scan.incremental.snapshot.enabled' = 'true',
     'scan.snapshot.fetch.size' = '1000',
     'scan.incremental.snapshot.chunk.size' = '10000'
