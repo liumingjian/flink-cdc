@@ -4,7 +4,7 @@
  * Licensed under the Apache Software License version 2.0, available at http://www.apache.org/licenses/LICENSE-2.0
  */
 
-package io.debezium.connector.postgresql.connection;
+package io.debezium.connector.gaussdb.connection;
 
 import io.debezium.connector.postgresql.connection.PostgresConnection;
 import io.debezium.jdbc.JdbcConfiguration;
@@ -22,24 +22,42 @@ import java.util.Locale;
 /**
  * A {@link PostgresConnection} variant for GaussDB.
  *
- * <p>GaussDB exposes a PostgreSQL-compatible protocol, but it may report the server version in a
- * format that PostgreSQL JDBC driver cannot map to PostgreSQL major/minor versions (e.g. "gaussdb
- * (GaussDB Kernel 505.2.1 ...)"). Debezium's {@link PostgresConnection} runs a minimum server
- * version check (>= 9.4) during connection initialization; this can fail even though GaussDB is
+ * <p>
+ * GaussDB exposes a PostgreSQL-compatible protocol, but it may report the
+ * server version in a
+ * format that PostgreSQL JDBC driver cannot map to PostgreSQL major/minor
+ * versions (e.g. "gaussdb
+ * (GaussDB Kernel 505.2.1 ...)"). Debezium's {@link PostgresConnection} runs a
+ * minimum server
+ * version check (>= 9.4) during connection initialization; this can fail even
+ * though GaussDB is
  * compatible.
  *
- * <p>This class detects that failure and skips the minimum version validation when connecting to
+ * <p>
+ * This class detects that failure and skips the minimum version validation when
+ * connecting to
  * GaussDB.
  */
 public class GaussDBPostgresConnection extends PostgresConnection {
 
     private static final Logger LOG = LoggerFactory.getLogger(GaussDBPostgresConnection.class);
 
-    private static final String MINIMUM_VERSION_ERROR =
-            "Cannot connect to a version of Postgres lower than 9.4";
+    private static final String MINIMUM_VERSION_ERROR = "Cannot connect to a version of Postgres lower than 9.4";
 
     public GaussDBPostgresConnection(JdbcConfiguration config, String connectionUsage) {
         super(config, connectionUsage);
+    }
+
+    /**
+     * Constructor with value converter builder for TypeRegistry initialization.
+     * This is required for CDC 3.1 compatibility where PostgresConnection needs
+     * valueConverterBuilder to create the TypeRegistry.
+     */
+    public GaussDBPostgresConnection(
+            JdbcConfiguration config,
+            PostgresValueConverterBuilder valueConverterBuilder,
+            String connectionUsage) {
+        super(config, valueConverterBuilder, connectionUsage);
     }
 
     @Override
@@ -51,7 +69,8 @@ public class GaussDBPostgresConnection extends PostgresConnection {
                 throw versionValidationFailure;
             }
 
-            // At this point, the underlying JDBC connection is typically already established and
+            // At this point, the underlying JDBC connection is typically already
+            // established and
             // cached by JdbcConnection; the failure is from Debezium's initial operations.
             final Connection establishedConnection;
             try {
@@ -71,8 +90,7 @@ public class GaussDBPostgresConnection extends PostgresConnection {
 
             // Preserve JdbcConnection behavior for optional on-connect statements.
             if (executeOnConnect) {
-                final String statements =
-                        config().getString(JdbcConfiguration.ON_CONNECT_STATEMENTS);
+                final String statements = config().getString(JdbcConfiguration.ON_CONNECT_STATEMENTS);
                 if (statements != null) {
                     final List<String> splitStatements = parseSqlStatementString(statements);
                     super.execute(splitStatements.toArray(new String[0]));

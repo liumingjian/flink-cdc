@@ -30,24 +30,17 @@ import org.apache.flink.cdc.connectors.gaussdb.source.config.GaussDBSourceConfig
 import org.apache.flink.cdc.connectors.gaussdb.source.fetch.GaussDBScanFetchTask;
 import org.apache.flink.cdc.connectors.gaussdb.source.fetch.GaussDBSourceFetchTaskContext;
 import org.apache.flink.cdc.connectors.gaussdb.source.fetch.GaussDBStreamFetchTask;
+import org.apache.flink.cdc.connectors.gaussdb.source.offset.GaussDBOffset;
 import org.apache.flink.cdc.connectors.gaussdb.source.utils.CustomGaussDBSchema;
 import org.apache.flink.cdc.connectors.gaussdb.source.utils.TableDiscoveryUtils;
 import org.apache.flink.util.FlinkRuntimeException;
 
-import io.debezium.connector.postgresql.PostgresConnectorConfig;
-import io.debezium.connector.postgresql.PostgresObjectUtils;
-import io.debezium.connector.postgresql.PostgresSchema;
-import io.debezium.connector.postgresql.PostgresTaskContext;
-import io.debezium.connector.postgresql.PostgresTopicSelector;
-import io.debezium.connector.postgresql.connection.PostgresConnection;
-import io.debezium.connector.postgresql.connection.PostgresReplicationConnection;
 import io.debezium.jdbc.JdbcConnection;
 import io.debezium.relational.TableId;
 import io.debezium.relational.Tables;
 import io.debezium.relational.history.TableChanges.TableChange;
-import io.debezium.schema.TopicSelector;
-
-import javax.annotation.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.sql.SQLException;
 import java.util.HashMap;
@@ -56,131 +49,61 @@ import java.util.Map;
 
 import static io.debezium.connector.postgresql.PostgresConnectorConfig.PLUGIN_NAME;
 import static io.debezium.connector.postgresql.PostgresConnectorConfig.SLOT_NAME;
-import static io.debezium.connector.postgresql.PostgresObjectUtils.createReplicationConnection;
-import static io.debezium.connector.postgresql.PostgresObjectUtils.newPostgresValueConverterBuilder;
-import static io.debezium.connector.postgresql.Utils.currentOffset;
 
-/** The dialect for GaussDB. */
+/**
+ * The dialect for GaussDB.
+ * Uses JdbcConnection directly (not PostgresConnection) to bypass PostgreSQL
+ * version check.
+ */
 public class GaussDBDialect implements JdbcDataSourceDialect {
-    private static final long serialVersionUID = 1L;
 
-    private static final String CONNECTION_NAME = "postgres-cdc-connector";
+    private static final Logger LOG = LoggerFactory.getLogger(GaussDBDialect.class);
+    private static final long serialVersionUID = 1L;
+    private static final String CONNECTION_NAME = "gaussdb-cdc-connector";
+
     private final GaussDBSourceConfig sourceConfig;
     private transient Tables.TableFilter filters;
-
     private transient CustomGaussDBSchema schema;
-
-    @Nullable
-    private GaussDBStreamFetchTask streamFetchTask;
+    private transient GaussDBStreamFetchTask streamFetchTask;
 
     public GaussDBDialect(GaussDBSourceConfig sourceConfig) {
         this.sourceConfig = sourceConfig;
     }
 
     @Override
-    public JdbcConnection openJdbcConnection(JdbcSourceConfig sourceConfig) {
-        GaussDBSourceConfig postgresSourceConfig = (GaussDBSourceConfig) sourceConfig;
-        PostgresConnectorConfig dbzConfig = postgresSourceConfig.getDbzConnectorConfig();
-
-        PostgresConnection.PostgresValueConverterBuilder valueConverterBuilder = newPostgresValueConverterBuilder(
-                dbzConfig);
-        PostgresConnection jdbc = new PostgresConnection(
-                dbzConfig.getJdbcConfig(),
-                valueConverterBuilder,
-                CONNECTION_NAME);
-
-        try {
-            jdbc.connect();
-        } catch (Exception e) {
-            throw new FlinkRuntimeException(e);
-        }
-        return jdbc;
-    }
-
-    public PostgresConnection openJdbcConnection() {
-        return (PostgresConnection) openJdbcConnection(sourceConfig);
-    }
-
-    public PostgresReplicationConnection openPostgresReplicationConnection(
-            PostgresConnection jdbcConnection) {
-        try {
-            PostgresConnectorConfig pgConnectorConfig = sourceConfig.getDbzConnectorConfig();
-            TopicSelector<TableId> topicSelector = PostgresTopicSelector.create(pgConnectorConfig);
-            PostgresConnection.PostgresValueConverterBuilder valueConverterBuilder = newPostgresValueConverterBuilder(
-                    pgConnectorConfig);
-            PostgresSchema schema = PostgresObjectUtils.newSchema(
-                    jdbcConnection,
-                    pgConnectorConfig,
-                    jdbcConnection.getTypeRegistry(),
-                    topicSelector,
-                    valueConverterBuilder.build(jdbcConnection.getTypeRegistry()));
-            PostgresTaskContext taskContext = PostgresObjectUtils.newTaskContext(pgConnectorConfig, schema,
-                    topicSelector);
-            return (PostgresReplicationConnection) createReplicationConnection(
-                    taskContext, jdbcConnection, false, pgConnectorConfig);
-        } catch (SQLException e) {
-            throw new RuntimeException("Failed to initialize PostgresReplicationConnection", e);
-        }
-    }
-
-    @Override
     public String getName() {
-        return "PostgreSQL";
+        return "GaussDB";
     }
 
+    /**
+     * Opens a JDBC connection using JdbcConnection directly (not
+     * PostgresConnection),
+     * bypassing the PostgreSQL version check that would fail for GaussDB.
+     */
     @Override
-    public Offset displayCurrentOffset(JdbcSourceConfig sourceConfig) {
+    public JdbcConnection openJdbcConnection(JdbcSourceConfig sourceConfig) {
+        LOG.info("=== GaussDBDialect.openJdbcConnection STARTED ===");
+        try {
+            GaussDBSourceConfig gaussDBSourceConfig = (GaussDBSourceConfig) sourceConfig;
+            LOG.info(
+                    "Creating JDBC connection to GaussDB: hostname={}, port={}, database={}",
+                    gaussDBSourceConfig.getHostname(),
+                    gaussDBSourceConfig.getPort(),
+                    gaussDBSourceConfig.getDatabaseList());
 
-        try (JdbcConnection jdbc = openJdbcConnection(sourceConfig)) {
-            return currentOffset((PostgresConnection) jdbc);
-
-        } catch (SQLException e) {
-            throw new FlinkRuntimeException(e);
-        }
-    }
-
-    @Override
-    public boolean isDataCollectionIdCaseSensitive(JdbcSourceConfig sourceConfig) {
-        // from GaussDB docs:
-        //
-        // SQL is case insensitive about key words and identifiers,
-        // except when identifiers are double-quoted to preserve the case
-        return true;
-    }
-
-    @Override
-    public ChunkSplitter createChunkSplitter(JdbcSourceConfig sourceConfig) {
-        return new GaussDBChunkSplitter(sourceConfig, this);
-    }
-
-    @Override
-    public List<TableId> discoverDataCollections(JdbcSourceConfig sourceConfig) {
-        try (JdbcConnection jdbc = openJdbcConnection(sourceConfig)) {
-            return TableDiscoveryUtils.listTables(
-                    // there is always a single database provided
-                    sourceConfig.getDatabaseList().get(0),
-                    jdbc,
-                    ((GaussDBSourceConfig) sourceConfig).getTableFilters());
-        } catch (SQLException e) {
-            throw new FlinkRuntimeException("Error to discover tables: " + e.getMessage(), e);
-        }
-    }
-
-    @Override
-    public Map<TableId, TableChange> discoverDataCollectionSchemas(JdbcSourceConfig sourceConfig) {
-        final List<TableId> capturedTableIds = discoverDataCollections(sourceConfig);
-
-        try (JdbcConnection jdbc = openJdbcConnection(sourceConfig)) {
-            // fetch table schemas
-            Map<TableId, TableChange> tableSchemas = new HashMap<>();
-            for (TableId tableId : capturedTableIds) {
-                TableChange tableSchema = queryTableSchema(jdbc, tableId);
-                tableSchemas.put(tableId, tableSchema);
-            }
-            return tableSchemas;
+            // Use JdbcConnection directly, not PostgresConnection
+            // This bypasses the PostgreSQL version check (9.4+ requirement)
+            JdbcConnection jdbcConnection = new JdbcConnection(
+                    gaussDBSourceConfig.getDbzConnectorConfig().getJdbcConfig(),
+                    new JdbcConnectionFactory(sourceConfig, getPooledDataSourceFactory()),
+                    "\"",
+                    "\"");
+            jdbcConnection.connect();
+            LOG.info("=== JDBC connection established successfully ===");
+            return jdbcConnection;
         } catch (Exception e) {
-            throw new FlinkRuntimeException(
-                    "Error to discover table schemas: " + e.getMessage(), e);
+            LOG.error("=== Failed to open JDBC connection ===", e);
+            throw new FlinkRuntimeException(e);
         }
     }
 
@@ -190,11 +113,95 @@ public class GaussDBDialect implements JdbcDataSourceDialect {
     }
 
     @Override
+    public List<TableId> discoverDataCollections(JdbcSourceConfig sourceConfig) {
+        LOG.info("=== GaussDBDialect.discoverDataCollections STARTED ===");
+        try (JdbcConnection jdbc = openJdbcConnection(sourceConfig)) {
+            List<TableId> tables = TableDiscoveryUtils.listTables(
+                    // there is always a single database provided
+                    sourceConfig.getDatabaseList().get(0),
+                    jdbc,
+                    ((GaussDBSourceConfig) sourceConfig).getTableFilters());
+            LOG.info("=== Discovered {} tables: {} ===", tables.size(), tables);
+            return tables;
+        } catch (SQLException e) {
+            LOG.error("=== Failed to discover tables ===", e);
+            throw new FlinkRuntimeException("Error to discover tables: " + e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public Map<TableId, TableChange> discoverDataCollectionSchemas(JdbcSourceConfig sourceConfig) {
+        LOG.info("=== GaussDBDialect.discoverDataCollectionSchemas STARTED ===");
+        final List<TableId> capturedTableIds = discoverDataCollections(sourceConfig);
+        LOG.info("Fetching schemas for {} tables", capturedTableIds.size());
+
+        try (JdbcConnection jdbc = openJdbcConnection(sourceConfig)) {
+            // fetch table schemas
+            Map<TableId, TableChange> tableSchemas = new HashMap<>();
+            for (TableId tableId : capturedTableIds) {
+                TableChange tableSchema = queryTableSchema(jdbc, tableId);
+                tableSchemas.put(tableId, tableSchema);
+            }
+            LOG.info("=== Successfully fetched {} table schemas ===", tableSchemas.size());
+            return tableSchemas;
+        } catch (Exception e) {
+            LOG.error("=== Failed to discover table schemas ===", e);
+            throw new FlinkRuntimeException(
+                    "Error to discover table schemas: " + e.getMessage(), e);
+        }
+    }
+
+    @Override
     public TableChange queryTableSchema(JdbcConnection jdbc, TableId tableId) {
         if (schema == null) {
-            schema = new CustomGaussDBSchema((PostgresConnection) jdbc, sourceConfig);
+            schema = new CustomGaussDBSchema(jdbc);
         }
         return schema.getTableSchema(tableId);
+    }
+
+    @Override
+    public Offset displayCurrentOffset(JdbcSourceConfig sourceConfig) {
+        try (JdbcConnection jdbc = openJdbcConnection(sourceConfig)) {
+            return currentOffset(jdbc);
+        } catch (SQLException e) {
+            throw new FlinkRuntimeException(e);
+        }
+    }
+
+    private GaussDBOffset currentOffset(JdbcConnection jdbc) {
+        try {
+            final String[] result = new String[1];
+            jdbc.query(
+                    "SELECT pg_current_xlog_location()",
+                    rs -> {
+                        if (rs.next()) {
+                            result[0] = rs.getString(1);
+                        }
+                    });
+
+            if (result[0] == null) {
+                throw new FlinkRuntimeException("Could not get current xlog location");
+            }
+
+            LOG.debug("Current GaussDB LSN: {}", result[0]);
+            // Create a map-based offset
+            Map<String, String> offsetMap = new HashMap<>();
+            offsetMap.put("lsn", result[0]);
+            return GaussDBOffset.of(offsetMap);
+        } catch (SQLException e) {
+            throw new FlinkRuntimeException("Failed to get current offset", e);
+        }
+    }
+
+    @Override
+    public boolean isDataCollectionIdCaseSensitive(JdbcSourceConfig sourceConfig) {
+        // GaussDB/PostgreSQL is case insensitive except when double-quoted
+        return true;
+    }
+
+    @Override
+    public ChunkSplitter createChunkSplitter(JdbcSourceConfig sourceConfig) {
+        return new GaussDBChunkSplitter(sourceConfig, this);
     }
 
     @Override
@@ -209,7 +216,7 @@ public class GaussDBDialect implements JdbcDataSourceDialect {
 
     @Override
     public JdbcSourceFetchTaskContext createFetchTaskContext(JdbcSourceConfig taskSourceConfig) {
-        return new GaussDBSourceFetchTaskContext(taskSourceConfig, this);
+        return new GaussDBSourceFetchTaskContext((GaussDBSourceConfig) taskSourceConfig, this);
     }
 
     @Override
@@ -224,7 +231,6 @@ public class GaussDBDialect implements JdbcDataSourceDialect {
         if (filters == null) {
             this.filters = sourceConfig.getTableFilters().dataCollectionFilter();
         }
-
         return filters.isIncluded(tableId);
     }
 
@@ -234,5 +240,9 @@ public class GaussDBDialect implements JdbcDataSourceDialect {
 
     public String getPluginName() {
         return sourceConfig.getDbzProperties().getProperty(PLUGIN_NAME.name());
+    }
+
+    public GaussDBSourceConfig getSourceConfig() {
+        return sourceConfig;
     }
 }

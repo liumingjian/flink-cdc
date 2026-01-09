@@ -40,7 +40,7 @@ public class GaussDBSourceConfigFactory extends JdbcSourceConfigFactory {
 
     private Duration heartbeatInterval = GaussDBSourceOptions.HEARTBEAT_INTERVAL.defaultValue();
 
-    private static final String JDBC_DRIVER = "org.postgresql.Driver";
+    private static final String JDBC_DRIVER = "com.huawei.gaussdb.jdbc.Driver";
 
     private String pluginName = "decoderbufs";
 
@@ -50,7 +50,10 @@ public class GaussDBSourceConfigFactory extends JdbcSourceConfigFactory {
 
     private List<String> schemaList;
 
-    /** Creates a new {@link GaussDBSourceConfig} for the given subtask {@code subtaskId}. */
+    /**
+     * Creates a new {@link GaussDBSourceConfig} for the given subtask
+     * {@code subtaskId}.
+     */
     @Override
     public GaussDBSourceConfig create(int subtaskId) {
         checkSupportCheckpointsAfterTasksFinished(closeIdleReaders);
@@ -58,18 +61,24 @@ public class GaussDBSourceConfigFactory extends JdbcSourceConfigFactory {
         props.setProperty("connector.class", PostgresConnector.class.getCanonicalName());
         props.setProperty("plugin.name", pluginName);
         // hard code server name, because we don't need to distinguish it, docs:
-        // Logical name that identifies and provides a namespace for the particular PostgreSQL
-        // database server/cluster being monitored. The logical name should be unique across
-        // all other connectors, since it is used as a prefix for all Kafka topic names coming
-        // from this connector. Only alphanumeric characters and underscores should be used.
+        // Logical name that identifies and provides a namespace for the particular
+        // PostgreSQL
+        // database server/cluster being monitored. The logical name should be unique
+        // across
+        // all other connectors, since it is used as a prefix for all Kafka topic names
+        // coming
+        // from this connector. Only alphanumeric characters and underscores should be
+        // used.
         props.setProperty("database.server.name", "postgres_cdc_source");
         props.setProperty("database.hostname", checkNotNull(hostname));
         props.setProperty("database.dbname", checkNotNull(database));
         props.setProperty("database.user", checkNotNull(username));
         props.setProperty("database.password", checkNotNull(password));
         props.setProperty("database.port", String.valueOf(port));
-        // we will create different slot name for each snapshot reader during backfiil task
-        // execution, the original slot name will be used by enumerator to create slot for
+        // we will create different slot name for each snapshot reader during backfiil
+        // task
+        // execution, the original slot name will be used by enumerator to create slot
+        // for
         // global stream split
         props.setProperty("slot.name", checkNotNull(slotName));
         // database history
@@ -78,9 +87,11 @@ public class GaussDBSourceConfigFactory extends JdbcSourceConfigFactory {
         props.setProperty("database.history.instance.name", UUID.randomUUID() + "_" + subtaskId);
         props.setProperty("database.history.skip.unparseable.ddl", String.valueOf(true));
         props.setProperty("database.history.refer.ddl", String.valueOf(true));
-        // we have to enable heartbeat for PG to make sure DebeziumChangeConsumer#handleBatch
+        // we have to enable heartbeat for PG to make sure
+        // DebeziumChangeConsumer#handleBatch
         // is invoked after job restart
-        // Enable TCP keep-alive probe to verify that the database connection is still alive
+        // Enable TCP keep-alive probe to verify that the database connection is still
+        // alive
         props.setProperty("database.tcpKeepAlive", String.valueOf(true));
         props.setProperty("heartbeat.interval.ms", String.valueOf(heartbeatInterval.toMillis()));
         props.setProperty("include.schema.changes", String.valueOf(includeSchemaChanges));
@@ -133,8 +144,10 @@ public class GaussDBSourceConfigFactory extends JdbcSourceConfigFactory {
     }
 
     /**
-     * An optional list of regular expressions that match schema names to be monitored; any schema
-     * name not included in the whitelist will be excluded from monitoring. By default all
+     * An optional list of regular expressions that match schema names to be
+     * monitored; any schema
+     * name not included in the whitelist will be excluded from monitoring. By
+     * default all
      * non-system schemas will be monitored.
      */
     public void schemaList(String[] schemaList) {
@@ -142,8 +155,10 @@ public class GaussDBSourceConfigFactory extends JdbcSourceConfigFactory {
     }
 
     /**
-     * The name of the GaussDB logical decoding plug-in installed on the server. Supported values
-     * are decoderbufs, wal2json, wal2json_rds, wal2json_streaming, wal2json_rds_streaming and
+     * The name of the GaussDB logical decoding plug-in installed on the server.
+     * Supported values
+     * are decoderbufs, wal2json, wal2json_rds, wal2json_streaming,
+     * wal2json_rds_streaming and
      * pgoutput.
      */
     public void decodingPluginName(String name) {
@@ -156,13 +171,18 @@ public class GaussDBSourceConfigFactory extends JdbcSourceConfigFactory {
     }
 
     /**
-     * The name of the PostgreSQL logical decoding slot that was created for streaming changes from
-     * a particular plug-in for a particular database/schema. The server uses this slot to stream
+     * The name of the PostgreSQL logical decoding slot that was created for
+     * streaming changes from
+     * a particular plug-in for a particular database/schema. The server uses this
+     * slot to stream
      * events to the connector that you are configuring. Default is "flink".
      *
-     * <p>Slot names must conform to <a
-     * href="https://www.postgresql.org/docs/current/static/warm-standby.html#STREAMING-REPLICATION-SLOTS-MANIPULATION">PostgreSQL
-     * replication slot naming rules</a>, which state: "Each replication slot has a name, which can
+     * <p>
+     * Slot names must conform to <a
+     * href=
+     * "https://www.postgresql.org/docs/current/static/warm-standby.html#STREAMING-REPLICATION-SLOTS-MANIPULATION">PostgreSQL
+     * replication slot naming rules</a>, which state: "Each replication slot has a
+     * name, which can
      * contain lower-case letters, numbers, and the underscore character."
      */
     public void slotName(String slotName) {

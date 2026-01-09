@@ -31,21 +31,26 @@ import org.apache.flink.cdc.connectors.gaussdb.source.events.OffsetCommitAckEven
 import org.apache.flink.cdc.connectors.gaussdb.source.events.OffsetCommitEvent;
 import org.apache.flink.util.FlinkRuntimeException;
 
-import io.debezium.connector.postgresql.connection.PostgresConnection;
-import io.debezium.connector.postgresql.connection.PostgresReplicationConnection;
-import io.debezium.connector.postgresql.spi.SlotState;
+import io.debezium.jdbc.JdbcConnection;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.sql.ResultSet;
 
 import static org.apache.flink.cdc.connectors.base.source.assigner.AssignerStatus.isNewlyAddedAssigning;
 import static org.apache.flink.cdc.connectors.base.source.assigner.AssignerStatus.isNewlyAddedAssigningSnapshotFinished;
 
 /**
- * The GaussDB source enumerator that enumerates receive the split request and assign the split to
+ * The GaussDB source enumerator that enumerates receive the split request and
+ * assign the split to
  * source readers.
  */
 @Internal
 public class GaussDBSourceEnumerator extends IncrementalSourceEnumerator {
 
-    private final GaussDBDialect postgresDialect;
+    private static final Logger LOG = LoggerFactory.getLogger(GaussDBSourceEnumerator.class);
+
+    private final GaussDBDialect gaussDialect;
     private final GaussDBSourceConfig sourceConfig;
     private volatile boolean receiveOffsetCommitAck = false;
 
@@ -53,10 +58,10 @@ public class GaussDBSourceEnumerator extends IncrementalSourceEnumerator {
             SplitEnumeratorContext<SourceSplitBase> context,
             GaussDBSourceConfig sourceConfig,
             SplitAssigner splitAssigner,
-            GaussDBDialect postgresDialect,
+            GaussDBDialect gaussDialect,
             Boundedness boundedness) {
         super(context, sourceConfig, splitAssigner, boundedness);
-        this.postgresDialect = postgresDialect;
+        this.gaussDialect = gaussDialect;
         this.sourceConfig = sourceConfig;
     }
 
@@ -68,13 +73,15 @@ public class GaussDBSourceEnumerator extends IncrementalSourceEnumerator {
 
     @Override
     protected void assignSplits() {
-        // if scan newly added table is enable, can not assign new added table's snapshot splits
+        // if scan newly added table is enable, can not assign new added table's
+        // snapshot splits
         // until source reader doesn't commit offset.
         if (sourceConfig.isScanNewlyAddedTableEnabled()
                 && streamSplitTaskId != null
                 && !receiveOffsetCommitAck
                 && isNewlyAddedAssigning(splitAssigner.getAssignerStatus())) {
-            // just return here, the reader has been put into readersAwaitingSplit, will be assigned
+            // just return here, the reader has been put into readersAwaitingSplit, will be
+            // assigned
             // split again later
             return;
         }
@@ -97,7 +104,8 @@ public class GaussDBSourceEnumerator extends IncrementalSourceEnumerator {
     @Override
     protected void syncWithReaders(int[] subtaskIds, Throwable t) {
         super.syncWithReaders(subtaskIds, t);
-        // if scan newly added table is enable, postgres enumerator will send its OffsetCommitEvent
+        // if scan newly added table is enable, gaussdb enumerator will send its
+        // OffsetCommitEvent
         // to tell reader whether to start offset commit.
         if (!receiveOffsetCommitAck
                 && sourceConfig.isScanNewlyAddedTableEnabled()
@@ -114,29 +122,58 @@ public class GaussDBSourceEnumerator extends IncrementalSourceEnumerator {
     /**
      * Create slot for the unique global stream split.
      *
-     * <p>Currently all startup modes need read the stream split. We need open the slot before
+     * <p>
+     * Currently all startup modes need read the stream split. We need open the slot
+     * before
      * reading the globalStreamSplit to catch all data changes.
      */
     private void createSlotForGlobalStreamSplit() {
-        try (PostgresConnection connection = postgresDialect.openJdbcConnection()) {
-            SlotState slotInfo =
-                    connection.getReplicationSlotState(
-                            postgresDialect.getSlotName(), postgresDialect.getPluginName());
-            // skip creating the replication slot when the slot exists.
-            if (slotInfo != null) {
+        String slotName = gaussDialect.getSlotName();
+        String pluginName = gaussDialect.getPluginName();
+
+        LOG.info("Checking replication slot: slotName={}, pluginName={}", slotName, pluginName);
+
+        try (JdbcConnection connection = gaussDialect.openJdbcConnection(sourceConfig)) {
+            // Check if slot exists using SQL query
+            boolean slotExists = checkSlotExists(connection, slotName);
+
+            if (slotExists) {
+                LOG.info("Replication slot '{}' already exists, skipping creation.", slotName);
                 return;
             }
-            PostgresReplicationConnection replicationConnection =
-                    postgresDialect.openPostgresReplicationConnection(connection);
-            replicationConnection.createReplicationSlot();
-            replicationConnection.close(false);
+
+            // Create the replication slot using SQL
+            LOG.info("Creating replication slot: {}", slotName);
+            String createSlotSql = String.format(
+                    "SELECT * FROM pg_create_logical_replication_slot('%s', '%s')",
+                    slotName, pluginName);
+            connection.execute(createSlotSql);
+            LOG.info("Replication slot '{}' created successfully.", slotName);
 
         } catch (Throwable t) {
             throw new FlinkRuntimeException(
                     String.format(
-                            "Fail to get or create slot for global stream split, the slot name is %s. Due to: ",
-                            postgresDialect.getSlotName()),
+                            "Failed to get or create replication slot '%s' with plugin '%s'",
+                            slotName, pluginName),
                     t);
+        }
+    }
+
+    private boolean checkSlotExists(JdbcConnection connection, String slotName) {
+        try {
+            final boolean[] exists = { false };
+            String checkSql = String.format(
+                    "SELECT slot_name FROM pg_replication_slots WHERE slot_name = '%s'",
+                    slotName);
+            connection.query(checkSql, rs -> {
+                if (rs.next()) {
+                    exists[0] = true;
+                }
+            });
+            return exists[0];
+        } catch (Exception e) {
+            LOG.warn("Error checking if replication slot exists: {}", e.getMessage());
+            return false;
         }
     }
 }

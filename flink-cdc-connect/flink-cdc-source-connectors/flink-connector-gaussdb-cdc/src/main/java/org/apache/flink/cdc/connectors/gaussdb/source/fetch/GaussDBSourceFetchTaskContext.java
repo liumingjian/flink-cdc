@@ -44,6 +44,7 @@ import io.debezium.connector.postgresql.PostgresSchema;
 import io.debezium.connector.postgresql.PostgresTaskContext;
 import io.debezium.connector.postgresql.PostgresTopicSelector;
 import io.debezium.connector.postgresql.connection.PostgresConnection;
+import io.debezium.connector.gaussdb.connection.GaussDBPostgresConnection;
 import io.debezium.connector.postgresql.connection.ReplicationConnection;
 import io.debezium.connector.postgresql.spi.Snapshotter;
 import io.debezium.data.Envelope;
@@ -75,7 +76,10 @@ import static io.debezium.connector.postgresql.PostgresConnectorConfig.SNAPSHOT_
 import static io.debezium.connector.postgresql.PostgresObjectUtils.createReplicationConnection;
 import static io.debezium.connector.postgresql.PostgresObjectUtils.newPostgresValueConverterBuilder;
 
-/** The context of {@link GaussDBScanFetchTask} and {@link GaussDBStreamFetchTask}. */
+/**
+ * The context of {@link GaussDBScanFetchTask} and
+ * {@link GaussDBStreamFetchTask}.
+ */
 public class GaussDBSourceFetchTaskContext extends JdbcSourceFetchTaskContext {
 
     private static final String CONNECTION_NAME = "postgres-fetch-task-connection";
@@ -108,11 +112,10 @@ public class GaussDBSourceFetchTaskContext extends JdbcSourceFetchTaskContext {
 
     private PostgresOffsetContext loadStartingOffsetState(
             PostgresOffsetContext.Loader loader, SourceSplitBase sourceSplitBase) {
-        Offset offset =
-                sourceSplitBase.isSnapshotSplit()
-                        ? new GaussDBOffsetFactory()
-                                .createInitialOffset() // get an offset for starting snapshot
-                        : sourceSplitBase.asStreamSplit().getStartingOffset();
+        Offset offset = sourceSplitBase.isSnapshotSplit()
+                ? new GaussDBOffsetFactory()
+                        .createInitialOffset() // get an offset for starting snapshot
+                : sourceSplitBase.asStreamSplit().getStartingOffset();
 
         return GaussDBOffsetUtils.getPostgresOffsetContext(loader, offset);
     }
@@ -122,48 +125,49 @@ public class GaussDBSourceFetchTaskContext extends JdbcSourceFetchTaskContext {
         LOG.debug("Configuring GaussDBSourceFetchTaskContext for split: {}", sourceSplitBase);
         PostgresConnectorConfig dbzConfig = getDbzConnectorConfig();
         if (sourceSplitBase instanceof SnapshotSplit) {
-            dbzConfig =
-                    new PostgresConnectorConfig(
-                            dbzConfig
-                                    .getConfig()
-                                    .edit()
-                                    .with(
-                                            "table.include.list",
-                                            ((SnapshotSplit) sourceSplitBase)
-                                                    .getTableId()
-                                                    .toString())
-                                    .with(
-                                            SLOT_NAME.name(),
-                                            ((GaussDBSourceConfig) sourceConfig)
-                                                    .getSlotNameForBackfillTask())
-                                    // drop slot for backfill stream split
-                                    .with(DROP_SLOT_ON_STOP.name(), true)
-                                    // Disable heartbeat event in snapshot split fetcher
-                                    .with(Heartbeat.HEARTBEAT_INTERVAL, 0)
-                                    .build());
+            dbzConfig = new PostgresConnectorConfig(
+                    dbzConfig
+                            .getConfig()
+                            .edit()
+                            .with(
+                                    "table.include.list",
+                                    ((SnapshotSplit) sourceSplitBase)
+                                            .getTableId()
+                                            .toString())
+                            .with(
+                                    SLOT_NAME.name(),
+                                    ((GaussDBSourceConfig) sourceConfig)
+                                            .getSlotNameForBackfillTask())
+                            // drop slot for backfill stream split
+                            .with(DROP_SLOT_ON_STOP.name(), true)
+                            // Disable heartbeat event in snapshot split fetcher
+                            .with(Heartbeat.HEARTBEAT_INTERVAL, 0)
+                            .build());
         } else {
-            dbzConfig =
-                    new PostgresConnectorConfig(
-                            dbzConfig
-                                    .getConfig()
-                                    .edit()
-                                    // never drop slot for stream split, which is also global split
-                                    .with(DROP_SLOT_ON_STOP.name(), false)
-                                    .build());
+            dbzConfig = new PostgresConnectorConfig(
+                    dbzConfig
+                            .getConfig()
+                            .edit()
+                            // never drop slot for stream split, which is also global split
+                            .with(DROP_SLOT_ON_STOP.name(), false)
+                            .build());
         }
 
         LOG.info("PostgresConnectorConfig is ", dbzConfig.getConfig().asProperties().toString());
         setDbzConnectorConfig(dbzConfig);
-        PostgresConnectorConfig.SnapshotMode snapshotMode =
-                PostgresConnectorConfig.SnapshotMode.parse(
-                        dbzConfig.getConfig().getString(SNAPSHOT_MODE));
+        PostgresConnectorConfig.SnapshotMode snapshotMode = PostgresConnectorConfig.SnapshotMode.parse(
+                dbzConfig.getConfig().getString(SNAPSHOT_MODE));
         this.snapShotter = snapshotMode.getSnapshotter(dbzConfig.getConfig());
 
-        PostgresConnection.PostgresValueConverterBuilder valueConverterBuilder =
-                newPostgresValueConverterBuilder(dbzConfig);
-        this.jdbcConnection =
-                new PostgresConnection(
-                        dbzConfig.getJdbcConfig(), valueConverterBuilder, CONNECTION_NAME);
+        PostgresConnection.PostgresValueConverterBuilder valueConverterBuilder = newPostgresValueConverterBuilder(
+                dbzConfig);
+        // Use GaussDBPostgresConnection which bypasses the PostgreSQL version
+        // validation
+        // that would fail for GaussDB ("Cannot connect to a version of Postgres lower
+        // than 9.4")
+        // Include valueConverterBuilder for TypeRegistry initialization
+        this.jdbcConnection = new GaussDBPostgresConnection(
+                dbzConfig.getJdbcConfig(), valueConverterBuilder, CONNECTION_NAME);
 
         TopicSelector<TableId> topicSelector = PostgresTopicSelector.create(dbzConfig);
         EmbeddedFlinkDatabaseHistory.registerHistory(
@@ -173,75 +177,66 @@ public class GaussDBSourceFetchTaskContext extends JdbcSourceFetchTaskContext {
                 sourceSplitBase.getTableSchemas().values());
 
         try {
-            this.schema =
-                    PostgresObjectUtils.newSchema(
-                            jdbcConnection,
-                            dbzConfig,
-                            jdbcConnection.getTypeRegistry(),
-                            topicSelector,
-                            valueConverterBuilder.build(jdbcConnection.getTypeRegistry()));
+            this.schema = PostgresObjectUtils.newSchema(
+                    jdbcConnection,
+                    dbzConfig,
+                    jdbcConnection.getTypeRegistry(),
+                    topicSelector,
+                    valueConverterBuilder.build(jdbcConnection.getTypeRegistry()));
         } catch (SQLException e) {
             throw new RuntimeException("Failed to initialize PostgresSchema", e);
         }
 
-        this.offsetContext =
-                loadStartingOffsetState(
-                        new PostgresOffsetContext.Loader(dbzConfig), sourceSplitBase);
+        this.offsetContext = loadStartingOffsetState(
+                new PostgresOffsetContext.Loader(dbzConfig), sourceSplitBase);
         this.partition = new PostgresPartition(dbzConfig.getLogicalName());
         this.taskContext = PostgresObjectUtils.newTaskContext(dbzConfig, schema, topicSelector);
 
         if (replicationConnection == null) {
-            replicationConnection =
-                    createReplicationConnection(
-                            this.taskContext,
-                            jdbcConnection,
-                            this.snapShotter.shouldSnapshot(),
-                            dbzConfig);
+            replicationConnection = createReplicationConnection(
+                    this.taskContext,
+                    jdbcConnection,
+                    this.snapShotter.shouldSnapshot(),
+                    dbzConfig);
         }
 
-        this.queue =
-                new ChangeEventQueue.Builder<DataChangeEvent>()
-                        .pollInterval(dbzConfig.getPollInterval())
-                        .maxBatchSize(dbzConfig.getMaxBatchSize())
-                        .maxQueueSize(dbzConfig.getMaxQueueSize())
-                        .maxQueueSizeInBytes(dbzConfig.getMaxQueueSizeInBytes())
-                        .loggingContextSupplier(
-                                () ->
-                                        taskContext.configureLoggingContext(
-                                                "postgres-cdc-connector-task"))
-                        // do not buffer any element, we use signal event
-                        // .buffering()
-                        .build();
+        this.queue = new ChangeEventQueue.Builder<DataChangeEvent>()
+                .pollInterval(dbzConfig.getPollInterval())
+                .maxBatchSize(dbzConfig.getMaxBatchSize())
+                .maxQueueSize(dbzConfig.getMaxQueueSize())
+                .maxQueueSizeInBytes(dbzConfig.getMaxQueueSizeInBytes())
+                .loggingContextSupplier(
+                        () -> taskContext.configureLoggingContext(
+                                "postgres-cdc-connector-task"))
+                // do not buffer any element, we use signal event
+                // .buffering()
+                .build();
 
         this.errorHandler = new PostgresErrorHandler(getDbzConnectorConfig(), queue);
         this.metadataProvider = PostgresObjectUtils.newEventMetadataProvider();
-        this.dispatcher =
-                new JdbcSourceEventDispatcher<>(
-                        dbzConfig,
-                        topicSelector,
-                        schema,
-                        queue,
-                        dbzConfig.getTableFilters().dataCollectionFilter(),
-                        DataChangeEvent::new,
-                        metadataProvider,
-                        schemaNameAdjuster,
-                        new GaussDBSchemaChangeEventHandler());
+        this.dispatcher = new JdbcSourceEventDispatcher<>(
+                dbzConfig,
+                topicSelector,
+                schema,
+                queue,
+                dbzConfig.getTableFilters().dataCollectionFilter(),
+                DataChangeEvent::new,
+                metadataProvider,
+                schemaNameAdjuster,
+                new GaussDBSchemaChangeEventHandler());
 
-        this.postgresDispatcher =
-                new PostgresEventDispatcher<>(
-                        dbzConfig,
-                        topicSelector,
-                        schema,
-                        queue,
-                        dbzConfig.getTableFilters().dataCollectionFilter(),
-                        DataChangeEvent::new,
-                        metadataProvider,
-                        schemaNameAdjuster);
+        this.postgresDispatcher = new PostgresEventDispatcher<>(
+                dbzConfig,
+                topicSelector,
+                schema,
+                queue,
+                dbzConfig.getTableFilters().dataCollectionFilter(),
+                DataChangeEvent::new,
+                metadataProvider,
+                schemaNameAdjuster);
 
-        ChangeEventSourceMetricsFactory<PostgresPartition> metricsFactory =
-                new DefaultChangeEventSourceMetricsFactory<>();
-        this.snapshotChangeEventSourceMetrics =
-                metricsFactory.getSnapshotMetrics(taskContext, queue, metadataProvider);
+        ChangeEventSourceMetricsFactory<PostgresPartition> metricsFactory = new DefaultChangeEventSourceMetricsFactory<>();
+        this.snapshotChangeEventSourceMetrics = metricsFactory.getSnapshotMetrics(taskContext, queue, metadataProvider);
     }
 
     @Override
@@ -325,8 +320,7 @@ public class GaussDBSourceFetchTaskContext extends JdbcSourceFetchTaskContext {
         return replicationConnection;
     }
 
-    public SnapshotChangeEventSourceMetrics<PostgresPartition>
-            getSnapshotChangeEventSourceMetrics() {
+    public SnapshotChangeEventSourceMetrics<PostgresPartition> getSnapshotChangeEventSourceMetrics() {
         return snapshotChangeEventSourceMetrics;
     }
 
@@ -340,7 +334,7 @@ public class GaussDBSourceFetchTaskContext extends JdbcSourceFetchTaskContext {
 
     public String getPluginName() {
         return PostgresConnectorConfig.LogicalDecoder.parse(
-                        sourceConfig.getDbzProperties().getProperty(PLUGIN_NAME.name()))
+                sourceConfig.getDbzProperties().getProperty(PLUGIN_NAME.name()))
                 .getPostgresPluginName();
     }
 }

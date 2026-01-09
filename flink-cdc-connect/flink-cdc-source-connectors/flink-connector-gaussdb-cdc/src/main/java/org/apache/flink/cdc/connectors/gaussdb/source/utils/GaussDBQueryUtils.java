@@ -38,14 +38,14 @@ public class GaussDBQueryUtils {
 
     private static final Logger LOG = LoggerFactory.getLogger(GaussDBQueryUtils.class);
 
-    private GaussDBQueryUtils() {}
+    private GaussDBQueryUtils() {
+    }
 
     public static Object[] queryMinMax(JdbcConnection jdbc, TableId tableId, String columnName)
             throws SQLException {
-        final String minMaxQuery =
-                String.format(
-                        "SELECT MIN(%s), MAX(%s) FROM %s",
-                        quote(columnName), quote(columnName), quote(tableId));
+        final String minMaxQuery = String.format(
+                "SELECT MIN(%s), MAX(%s) FROM %s",
+                quote(columnName), quote(columnName), quote(tableId));
         return jdbc.queryAndMap(
                 minMaxQuery,
                 rs -> {
@@ -62,17 +62,21 @@ public class GaussDBQueryUtils {
 
     public static long queryApproximateRowCnt(JdbcConnection jdbc, TableId tableId)
             throws SQLException {
-        // The statement used to get approximate row count which is less
-        // accurate than COUNT(*), but is more efficient for large table.
-        // https://stackoverflow.com/questions/7943233/fast-way-to-discover-the-row-count-of-a-table-in-postgresql
-        // NOTE: it requires ANALYZE or VACUUM to be run first in PostgreSQL.
-        final String query =
-                String.format(
-                        "SELECT reltuples::bigint FROM pg_class WHERE oid = to_regclass('%s')",
-                        tableId.toString());
+        // GaussDB-compatible query using schema and table name join
+        // Avoids to_regclass() function which doesn't exist in GaussDB
+        // NOTE: it requires ANALYZE or VACUUM to be run first.
+        final String query = "SELECT reltuples::bigint"
+                + " FROM pg_class c"
+                + " JOIN pg_namespace n ON n.oid = c.relnamespace"
+                + " WHERE n.nspname = ?"
+                + " AND c.relname = ?";
 
-        return jdbc.queryAndMap(
+        return jdbc.prepareQueryAndMap(
                 query,
+                ps -> {
+                    ps.setString(1, tableId.schema() != null ? tableId.schema() : "public");
+                    ps.setString(2, tableId.table());
+                },
                 rs -> {
                     if (!rs.next()) {
                         throw new SQLException(
@@ -87,10 +91,9 @@ public class GaussDBQueryUtils {
     public static Object queryMin(
             JdbcConnection jdbc, TableId tableId, String columnName, Object excludedLowerBound)
             throws SQLException {
-        final String query =
-                String.format(
-                        "SELECT MIN(%s) FROM %s WHERE %s > ?",
-                        quote(columnName), quote(tableId), quote(columnName));
+        final String query = String.format(
+                "SELECT MIN(%s) FROM %s WHERE %s > ?",
+                quote(columnName), quote(tableId), quote(columnName));
         return jdbc.prepareQueryAndMap(
                 query,
                 ps -> ps.setObject(1, excludedLowerBound),
@@ -114,17 +117,16 @@ public class GaussDBQueryUtils {
             Object includedLowerBound)
             throws SQLException {
         String quotedColumn = quote(splitColumnName);
-        String query =
-                String.format(
-                        "SELECT MAX(%s) FROM ("
-                                + "SELECT %s FROM %s WHERE %s >= ? ORDER BY %s ASC LIMIT %s"
-                                + ") AS T",
-                        quotedColumn,
-                        quotedColumn,
-                        quote(tableId),
-                        quotedColumn,
-                        quotedColumn,
-                        chunkSize);
+        String query = String.format(
+                "SELECT MAX(%s) FROM ("
+                        + "SELECT %s FROM %s WHERE %s >= ? ORDER BY %s ASC LIMIT %s"
+                        + ") AS T",
+                quotedColumn,
+                quotedColumn,
+                quote(tableId),
+                quotedColumn,
+                quotedColumn,
+                chunkSize);
         return jdbc.prepareQueryAndMap(
                 query,
                 ps -> ps.setObject(1, includedLowerBound),
@@ -185,8 +187,7 @@ public class GaussDBQueryUtils {
             return buildSelectWithRowLimits(
                     tableId, limitSize, "*", Optional.ofNullable(condition), Optional.empty());
         } else {
-            final String orderBy =
-                    pkRowType.getFieldNames().stream().collect(Collectors.joining(", "));
+            final String orderBy = pkRowType.getFieldNames().stream().collect(Collectors.joining(", "));
             return buildSelectWithBoundaryRowLimits(
                     tableId,
                     limitSize,
@@ -252,8 +253,7 @@ public class GaussDBQueryUtils {
 
     private static void addPrimaryKeyColumnsToCondition(
             RowType pkRowType, StringBuilder sql, String predicate) {
-        for (Iterator<String> fieldNamesIt = pkRowType.getFieldNames().iterator();
-                fieldNamesIt.hasNext(); ) {
+        for (Iterator<String> fieldNamesIt = pkRowType.getFieldNames().iterator(); fieldNamesIt.hasNext();) {
             sql.append(fieldNamesIt.next()).append(predicate);
             if (fieldNamesIt.hasNext()) {
                 sql.append(" AND ");
@@ -263,8 +263,7 @@ public class GaussDBQueryUtils {
 
     private static String getPrimaryKeyColumnsProjection(RowType pkRowType) {
         StringBuilder sql = new StringBuilder();
-        for (Iterator<String> fieldNamesIt = pkRowType.getFieldNames().iterator();
-                fieldNamesIt.hasNext(); ) {
+        for (Iterator<String> fieldNamesIt = pkRowType.getFieldNames().iterator(); fieldNamesIt.hasNext();) {
             sql.append(fieldNamesIt.next());
             if (fieldNamesIt.hasNext()) {
                 sql.append(" , ");
@@ -275,8 +274,7 @@ public class GaussDBQueryUtils {
 
     private static String getMaxPrimaryKeyColumnsProjection(RowType pkRowType) {
         StringBuilder sql = new StringBuilder();
-        for (Iterator<String> fieldNamesIt = pkRowType.getFieldNames().iterator();
-                fieldNamesIt.hasNext(); ) {
+        for (Iterator<String> fieldNamesIt = pkRowType.getFieldNames().iterator(); fieldNamesIt.hasNext();) {
             sql.append("MAX(" + fieldNamesIt.next() + ")");
             if (fieldNamesIt.hasNext()) {
                 sql.append(" , ");
