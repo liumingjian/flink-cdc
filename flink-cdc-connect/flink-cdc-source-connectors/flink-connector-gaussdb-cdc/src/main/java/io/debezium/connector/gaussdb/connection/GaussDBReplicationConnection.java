@@ -609,7 +609,7 @@ public class GaussDBReplicationConnection implements ReplicationConnection {
                 ? connectorConfig.connectionTimeout()
                 : Duration.ofSeconds(30);
         final int previousLoginTimeoutSeconds = DriverManager.getLoginTimeout();
-        final int loginTimeoutSeconds = (int) Math.min(Integer.MAX_VALUE, Math.max(0L, timeout.toSeconds()));
+        final int loginTimeoutSeconds = (int) Math.min(Integer.MAX_VALUE, Math.max(0L, timeout.getSeconds()));
 
         LOG.info(
                 "Opening replication connection to {}:{}/{} with user={}, replication={}, timeout={}s",

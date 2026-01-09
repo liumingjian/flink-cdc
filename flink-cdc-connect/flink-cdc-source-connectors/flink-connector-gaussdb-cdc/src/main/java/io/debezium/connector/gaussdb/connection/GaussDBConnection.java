@@ -18,7 +18,10 @@ import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.time.Duration;
 
-/** {@link JdbcConnection} extension used for connecting to GaussDB instances via JDBC. */
+/**
+ * {@link JdbcConnection} extension used for connecting to GaussDB instances via
+ * JDBC.
+ */
 public class GaussDBConnection extends JdbcConnection {
 
     public static final String CONNECTION_GENERAL = "Debezium General";
@@ -30,7 +33,8 @@ public class GaussDBConnection extends JdbcConnection {
     public static final Duration DEFAULT_CONNECT_RETRY_DELAY = Duration.ofSeconds(5);
 
     /**
-     * Internal connection settings (stored in {@link JdbcConfiguration}) that should not be passed
+     * Internal connection settings (stored in {@link JdbcConfiguration}) that
+     * should not be passed
      * to the JDBC driver.
      */
     public static final String CONNECT_MAX_RETRIES_KEY = "gaussdb.connect.max.retries";
@@ -39,22 +43,20 @@ public class GaussDBConnection extends JdbcConnection {
 
     private static final Logger LOG = LoggerFactory.getLogger(GaussDBConnection.class);
 
-    private static final String URL_PATTERN =
-            "jdbc:gaussdb://${"
-                    + JdbcConfiguration.HOSTNAME
-                    + "}:${"
-                    + JdbcConfiguration.PORT
-                    + "}/${"
-                    + JdbcConfiguration.DATABASE
-                    + "}";
+    private static final String URL_PATTERN = "jdbc:gaussdb://${"
+            + JdbcConfiguration.HOSTNAME
+            + "}:${"
+            + JdbcConfiguration.PORT
+            + "}/${"
+            + JdbcConfiguration.DATABASE
+            + "}";
 
-    private static final ConnectionFactory DEFAULT_DELEGATE_FACTORY =
-            JdbcConnection.patternBasedFactory(
-                    URL_PATTERN,
-                    DRIVER_CLASS_NAME,
-                    GaussDBConnection.class.getClassLoader(),
-                    JdbcConfiguration.PORT.withDefault(
-                            GaussDBConnectorConfig.PORT.defaultValueAsString()));
+    private static final ConnectionFactory DEFAULT_DELEGATE_FACTORY = JdbcConnection.patternBasedFactory(
+            URL_PATTERN,
+            DRIVER_CLASS_NAME,
+            GaussDBConnection.class.getClassLoader(),
+            JdbcConfiguration.PORT.withDefault(
+                    GaussDBConnectorConfig.PORT.defaultValueAsString()));
 
     public GaussDBConnection(JdbcConfiguration config, String connectionUsage) {
         this(config, connectionUsage, DEFAULT_DELEGATE_FACTORY);
@@ -97,7 +99,8 @@ public class GaussDBConnection extends JdbcConnection {
 
     /** Executes a lightweight health check query. */
     public void executeHealthCheck() throws SQLException {
-        query("SELECT 1", rs -> {});
+        query("SELECT 1", rs -> {
+        });
     }
 
     @Override
@@ -121,16 +124,13 @@ public class GaussDBConnection extends JdbcConnection {
         @Override
         public Connection connect(JdbcConfiguration config) throws SQLException {
             final int maxRetries = Math.max(1, config.getInteger(CONNECT_MAX_RETRIES_KEY, 3));
-            final long retryDelayMs =
-                    Math.max(0L, config.getLong(CONNECT_RETRY_DELAY_MS_KEY, 5_000L));
-            final Duration timeout =
-                    config.getConnectionTimeout() != null
-                            ? config.getConnectionTimeout()
-                            : DEFAULT_CONNECTION_TIMEOUT;
+            final long retryDelayMs = Math.max(0L, config.getLong(CONNECT_RETRY_DELAY_MS_KEY, 5_000L));
+            final Duration timeout = config.getConnectionTimeout() != null
+                    ? config.getConnectionTimeout()
+                    : DEFAULT_CONNECTION_TIMEOUT;
 
             final int previousLoginTimeoutSeconds = DriverManager.getLoginTimeout();
-            final int loginTimeoutSeconds =
-                    (int) Math.min(Integer.MAX_VALUE, Math.max(0L, timeout.toSeconds()));
+            final int loginTimeoutSeconds = (int) Math.min(Integer.MAX_VALUE, Math.max(0L, timeout.getSeconds()));
 
             SQLException lastException = null;
             try {
@@ -165,9 +165,8 @@ public class GaussDBConnection extends JdbcConnection {
                             Thread.sleep(retryDelayMs);
                         } catch (InterruptedException ie) {
                             Thread.currentThread().interrupt();
-                            SQLException interrupted =
-                                    new SQLException(
-                                            "Interrupted while retrying to connect to GaussDB", ie);
+                            SQLException interrupted = new SQLException(
+                                    "Interrupted while retrying to connect to GaussDB", ie);
                             interrupted.addSuppressed(e);
                             throw interrupted;
                         }
@@ -185,9 +184,8 @@ public class GaussDBConnection extends JdbcConnection {
         private static JdbcConfiguration sanitized(JdbcConfiguration config) {
             return JdbcConfiguration.adapt(
                     config.filter(
-                            key ->
-                                    !CONNECT_MAX_RETRIES_KEY.equals(key)
-                                            && !CONNECT_RETRY_DELAY_MS_KEY.equals(key)));
+                            key -> !CONNECT_MAX_RETRIES_KEY.equals(key)
+                                    && !CONNECT_RETRY_DELAY_MS_KEY.equals(key)));
         }
     }
 }
